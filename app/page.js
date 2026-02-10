@@ -1,208 +1,151 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 
-export default function Page() {
-  const [symbols, setSymbols] = useState([]);
-  const [scores, setScores] = useState({});
-  const [alertsEnabled, setAlertsEnabled] = useState(false);
-  const [audioReady, setAudioReady] = useState(false);
+const COINS = [
+  { symbol: "SOL", id: "solana", momentum: 82 },
+  { symbol: "AVAX", id: "avalanche-2", momentum: 74 },
+  { symbol: "MATIC", id: "matic-network", momentum: 61 },
+  { symbol: "ADA", id: "cardano", momentum: 48 },
+  { symbol: "DOT", id: "polkadot", momentum: 42 }
+];
 
-  const previousPrices = useRef({});
-  const history = useRef({});
-  const alerted = useRef({});
-  const audioRef = useRef(null);
+function confidenceInfo(momentum) {
+  if (momentum >= 75)
+    return {
+      label: "High",
+      color: "text-green-400",
+      tooltip: "Strong momentum, volume support, and trend confirmation"
+    };
+  if (momentum >= 55)
+    return {
+      label: "Medium",
+      color: "text-yellow-400",
+      tooltip: "Moderate momentum, trend forming but not confirmed"
+    };
+  return {
+    label: "Low",
+    color: "text-red-400",
+    tooltip: "Weak momentum or trend deterioration"
+  };
+}
 
-  const ALERT_SCORE_THRESHOLD = 2.5;
+export default function Dashboard() {
+  const [sortBy, setSortBy] = useState("momentum");
+  const [search, setSearch] = useState("");
+  const [data, setData] = useState([]);
 
-  // Load Coinbase USD altcoins
-  async function loadCoinbaseAltcoins() {
-    const res = await fetch("https://api.exchange.coinbase.com/products");
-    const products = await res.json();
+  useEffect(() => {
+    async function fetchPrices() {
+      try {
+        const ids = COINS.map(c => c.id).join(",");
+        const res = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`
+        );
+        const prices = await res.json();
 
-    const coins = products
-      .filter(
-        (p) =>
-          p.quote_currency === "USD" &&
-          p.status === "online" &&
-          !["BTC", "ETH", "USDT", "USDC"].includes(p.base_currency)
-      )
-      .map((p) => p.base_currency);
+        let merged = COINS.map(coin => ({
+          ...coin,
+          price: prices[coin.id]?.usd ?? 0,
+          change24h: prices[coin.id]?.usd_24h_change ?? 0
+        }));
 
-    setSymbols([...new Set(coins)].slice(0, 150));
-  }
+        merged = merged.filter(coin =>
+          coin.symbol.toLowerCase().includes(search.toLowerCase())
+        );
 
-  async function fetchPrices() {
-    const res = await fetch(
-      "https://api.coinbase.com/v2/exchange-rates?currency=USD"
-    );
-    const data = await res.json();
+        if (sortBy === "momentum") {
+          merged.sort((a, b) => b.momentum - a.momentum);
+        }
+        if (sortBy === "change") {
+          merged.sort((a, b) => b.change24h - a.change24h);
+        }
+        if (sortBy === "confidence") {
+          merged.sort((a, b) => b.momentum - a.momentum);
+        }
 
-    const newScores = {};
-
-    symbols.forEach((symbol) => {
-      const rate = data.data.rates[symbol];
-      if (!rate) return;
-
-      const price = 1 / rate;
-      const prev = previousPrices.current[symbol];
-      const change = prev ? ((price - prev) / prev) * 100 : 0;
-
-      history.current[symbol] = [
-        ...(history.current[symbol] || []),
-        change
-      ].slice(-15);
-
-      const h = history.current[symbol];
-      const avg = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
-
-      const m1 = h[h.length - 1] || 0;
-      const m5 = avg(h.slice(-5));
-      const m15 = avg(h.slice(-15));
-
-      const confirmation =
-        (m1 > 0 ? 1 : -1) +
-        (m5 > 0 ? 1 : -1) +
-        (m15 > -0.2 ? 1 : -1);
-
-      const volatility = Math.max(...h) - Math.min(...h);
-
-      const score =
-        m1 * 2 +
-        m5 * 1.5 +
-        m15 +
-        confirmation * 0.75 -
-        volatility * 0.25;
-
-      const isAlert =
-        audioReady &&
-        alertsEnabled &&
-        m1 > 0 &&
-        m5 > 0 &&
-        m15 > -0.2 &&
-        score >= ALERT_SCORE_THRESHOLD;
-
-      if (isAlert && !alerted.current[symbol]) {
-        alerted.current[symbol] = true;
-        audioRef.current?.play().catch(() => {});
+        setData(merged);
+      } catch (e) {
+        console.error("Price fetch failed", e);
       }
+    }
 
-      if (!isAlert) alerted.current[symbol] = false;
-
-      newScores[symbol] = {
-        symbol,
-        price,
-        m1,
-        m5,
-        m15,
-        score,
-        isAlert
-      };
-    });
-
-    previousPrices.current = Object.fromEntries(
-      Object.entries(newScores).map(([k, v]) => [k, v.price])
-    );
-
-    setScores(newScores);
-  }
-
-  useEffect(() => {
-    loadCoinbaseAltcoins();
-  }, []);
-
-  useEffect(() => {
-    if (symbols.length === 0) return;
     fetchPrices();
-    const i = setInterval(fetchPrices, 60000);
-    return () => clearInterval(i);
-  }, [symbols]);
-
-  const ranked = Object.values(scores)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10);
-
-  const color = (v) => (v > 0 ? "#22c55e" : "#ef4444");
+  }, [sortBy, search]);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0f172a", color: "#fff", padding: 40 }}>
-      <audio
-        ref={audioRef}
-        src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"
-        preload="auto"
-      />
+    <main className="min-h-screen bg-gray-900 text-white p-8">
+      <h1 className="text-3xl font-bold mb-6">
+        Crypto Altcoin Momentum Dashboard
+      </h1>
 
-      <h1 style={{ fontSize: 28 }}>Top 10 Altcoins — Alert Scanner</h1>
+      <div className="flex gap-4 mb-4">
+        <input
+          type="text"
+          placeholder="Search coin"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="bg-gray-800 px-3 py-2 rounded w-40"
+        />
 
-      <p style={{ opacity: 0.6 }}>
-        Multi-timeframe confirmation • updates every 60s
-      </p>
-
-      {/* USER INTERACTION GATE */}
-      {!audioReady && (
-        <button
-          onClick={() => {
-            setAudioReady(true);
-            setAlertsEnabled(true);
-          }}
-          style={{
-            marginTop: 20,
-            padding: "10px 16px",
-            borderRadius: 8,
-            background: "#22c55e",
-            color: "#052e16",
-            fontWeight: "bold",
-            cursor: "pointer"
-          }}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          className="bg-gray-800 px-3 py-2 rounded"
         >
-          🔔 Enable Sound Alerts
-        </button>
-      )}
-
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 30 }}>
-        {ranked.map((c, i) => (
-          <div
-            key={c.symbol}
-            style={{
-              background: c.isAlert ? "#052e16" : "#020617",
-              padding: 20,
-              borderRadius: 12,
-              width: 280,
-              borderLeft: `6px solid ${color(c.score)}`
-            }}
-          >
-            <div style={{ opacity: 0.7 }}>Rank #{i + 1}</div>
-            <div style={{ fontSize: 22, fontWeight: "bold" }}>{c.symbol}</div>
-            <div>${c.price.toFixed(4)}</div>
-
-            <div style={{ marginTop: 6 }}>
-              <span style={{ color: color(c.m1) }}>1m {c.m1.toFixed(2)}%</span>{" "}
-              | <span style={{ color: color(c.m5) }}>5m {c.m5.toFixed(2)}%</span>{" "}
-              | <span style={{ color: color(c.m15) }}>15m {c.m15.toFixed(2)}%</span>
-            </div>
-
-            <div style={{ marginTop: 8, fontSize: 14 }}>
-              Score: {c.score.toFixed(2)}
-            </div>
-
-            {c.isAlert && (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: "6px 10px",
-                  background: "#22c55e",
-                  color: "#052e16",
-                  borderRadius: 6,
-                  fontWeight: "bold",
-                  fontSize: 12
-                }}
-              >
-                🟢 Momentum Confirmed
-              </div>
-            )}
-          </div>
-        ))}
+          <option value="momentum">Momentum</option>
+          <option value="change">24h Change</option>
+          <option value="confidence">Confidence</option>
+        </select>
       </div>
-    </div>
+
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="border-b border-gray-700 text-left">
+            <th className="py-2">Rank</th>
+            <th>Coin</th>
+            <th>Price</th>
+            <th>24h %</th>
+            <th>Momentum</th>
+            <th>Trend</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((coin, index) => {
+            const confidence = confidenceInfo(coin.momentum);
+            const isTop = index < 3;
+
+            return (
+              <tr
+                key={coin.symbol}
+                className={`border-b border-gray-800 ${
+                  isTop ? "bg-gray-800/60" : ""
+                }`}
+              >
+                <td className="py-2 font-semibold">
+                  {isTop ? `🔥 ${index + 1}` : index + 1}
+                </td>
+                <td>{coin.symbol}</td>
+                <td>${coin.price.toFixed(2)}</td>
+                <td className={coin.change24h >= 0 ? "text-green-400" : "text-red-400"}>
+                  {coin.change24h.toFixed(2)}%
+                </td>
+                <td>{coin.momentum}</td>
+                <td className="text-sm text-gray-400">
+                  {isTop ? "🔒 Premium" : "—"}
+                </td>
+                <td
+                  className={`${confidence.color} cursor-help`}
+                  title={confidence.tooltip}
+                >
+                  {confidence.label}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </main>
   );
 }
