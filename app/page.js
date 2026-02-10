@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 
 /**
  * Crypto Altcoin Momentum Dashboard (MVP + Explainability Drawer)
@@ -25,7 +26,6 @@ function formatMoney(n) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
   const num = Number(n);
   if (num >= 1) return num.toLocaleString(undefined, { style: "currency", currency: "USD" });
-  // For tiny prices (e.g., $0.0000123)
   return "$" + num.toPrecision(3);
 }
 
@@ -34,132 +34,6 @@ function formatPct(n) {
   const num = Number(n);
   const sign = num > 0 ? "+" : "";
   return `${sign}${num.toFixed(2)}%`;
-}
-
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-/**
- * Momentum score: explainable composite, NOT a prediction.
- * Uses:
- * - 24h change (fast signal)
- * - 7d change (trend confirmation)
- * - 30d change (trend stability)
- * - volatility penalty (too spiky = lower confidence)
- */
-function computeMomentumBreakdown(coin) {
-  const c24 = Number(coin.price_change_percentage_24h_in_currency ?? 0);
-  const c7 = Number(coin.price_change_percentage_7d_in_currency ?? 0);
-  const c30 = Number(coin.price_change_percentage_30d_in_currency ?? 0);
-
-  // Volatility proxy: big gap between 24h and 7d implies choppiness
-  const volatilityProxy = Math.abs(c24 - c7);
-
-  // Normalize contributions (simple, explainable clamps)
-  const n24 = clamp(c24, -20, 20);
-  const n7 = clamp(c7, -30, 30);
-  const n30 = clamp(c30, -50, 50);
-
-  // Weights (tunable): heavier on 7d, then 24h, then 30d.
-  const raw =
-    0.45 * n7 +
-    0.35 * n24 +
-    0.20 * (n30 / 1.5); // soften 30d so it doesn’t dominate
-
-  // Penalty for “spikiness”
-  const penalty = clamp(volatilityProxy, 0, 40) * 0.25;
-
-  // Final score (0–100)
-  // Center raw around 50, scale, then apply penalty.
-  const scaled = 50 + raw * 1.2 - penalty;
-  const score = Math.round(clamp(scaled, 0, 100));
-
-  // Build drivers (plain English)
-  const drivers = [];
-
-  // Trend alignment
-  const trendAligned =
-    (c24 >= 0 && c7 >= 0) || (c24 <= 0 && c7 <= 0);
-
-  if (c7 >= 5) drivers.push(`Strong 7-day trend (${formatPct(c7)}) is supporting momentum.`);
-  else if (c7 <= -5) drivers.push(`Weak 7-day trend (${formatPct(c7)}) is dragging momentum.`);
-  else drivers.push(`7-day trend is mild (${formatPct(c7)}), so momentum is less decisive.`);
-
-  if (c24 >= 3) drivers.push(`Recent 24h move is positive (${formatPct(c24)}) and adds short-term strength.`);
-  else if (c24 <= -3) drivers.push(`Recent 24h move is negative (${formatPct(c24)}) and adds short-term pressure.`);
-  else drivers.push(`24h move is small (${formatPct(c24)}), so the short-term signal is muted.`);
-
-  if (Math.abs(c30) >= 15) {
-    const direction = c30 >= 0 ? "uptrend" : "downtrend";
-    drivers.push(`30-day ${direction} (${formatPct(c30)}) provides broader context.`);
-  } else {
-    drivers.push(`30-day change is modest (${formatPct(c30)}), suggesting a steadier backdrop.`);
-  }
-
-  // Choppiness / volatility proxy
-  if (volatilityProxy >= 15) {
-    drivers.push(
-      `Signals are choppy (24h vs 7d differs by ~${volatilityProxy.toFixed(1)} pts), which reduces confidence.`
-    );
-  } else {
-    drivers.push(`Signals are fairly consistent (24h vs 7d gap ~${volatilityProxy.toFixed(1)} pts).`);
-  }
-
-  if (trendAligned) {
-    drivers.push("Short-term and 7-day signals point in the same direction (better signal quality).");
-  } else {
-    drivers.push("Short-term and 7-day signals conflict (treat as a lower-quality setup).");
-  }
-
-  // “What would change this score?”
-  const whatWouldChange = [];
-  if (c7 < 5) whatWouldChange.push("A stronger 7-day trend would raise momentum.");
-  if (c24 < 3) whatWouldChange.push("A clean positive 24h move would improve the short-term signal.");
-  if (volatilityProxy > 12) whatWouldChange.push("Less choppiness between short-term and 7-day moves would raise confidence.");
-  if (c30 < 0) whatWouldChange.push("A stabilizing 30-day trend would reduce longer-term drag.");
-
-  return {
-    score,
-    inputs: { c24, c7, c30, volatilityProxy },
-    drivers,
-    whatWouldChange: whatWouldChange.length ? whatWouldChange : ["Momentum is already supported by multiple aligned signals."],
-  };
-}
-
-/**
- * Confidence labels:
- * - High: score high AND signals aligned AND not too choppy
- * - Medium: decent score but mild conflict or mild choppiness
- * - Low: low score or high conflict/choppiness
- */
-function computeConfidence(breakdown) {
-  const { score, inputs } = breakdown;
-  const { c24, c7, volatilityProxy } = inputs;
-
-  const aligned = (c24 >= 0 && c7 >= 0) || (c24 <= 0 && c7 <= 0);
-
-  if (score >= 70 && aligned && volatilityProxy <= 12) {
-    return {
-      label: "High",
-      explanation:
-        "Signals are strong and mostly aligned. This does not predict returns — it indicates cleaner momentum conditions.",
-    };
-  }
-
-  if (score >= 55 && (aligned || volatilityProxy <= 18)) {
-    return {
-      label: "Medium",
-      explanation:
-        "Momentum is present, but the signal quality is mixed (mild conflict or choppiness). Consider smaller position sizing or waiting for confirmation.",
-    };
-  }
-
-  return {
-    label: "Low",
-    explanation:
-      "Momentum is weak or inconsistent. This is not a forecast — it suggests the current setup is noisier and harder to rely on.",
-  };
 }
 
 function Badge({ children, tone = "neutral" }) {
@@ -186,14 +60,8 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-black/30"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} aria-hidden="true" />
 
-      {/* Panel */}
       <div
         className="fixed right-0 top-0 z-50 h-full w-full max-w-lg bg-white shadow-2xl border-l border-slate-200"
         role="dialog"
@@ -242,9 +110,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
               >
                 Confidence: {confidence?.label ?? "—"}
               </Badge>
-              <span className="text-xs text-slate-500">
-                Momentum ≠ prediction
-              </span>
+              <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
             </div>
             <p className="mt-3 text-sm text-slate-700 leading-relaxed">
               {confidence?.explanation ?? ""}
@@ -292,7 +158,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
               </div>
             </div>
             <p className="mt-3 text-xs text-slate-500 leading-relaxed">
-              These inputs are used to summarize momentum conditions. They are not a guarantee of outcomes.
+              These inputs summarize momentum conditions. They are not a guarantee of outcomes.
             </p>
           </div>
 
@@ -325,10 +191,9 @@ export default function Page() {
   const [coins, setCoins] = useState([]);
   const [status, setStatus] = useState({ loading: true, error: "" });
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState("score"); // score | name | price | change24 | change7 | marketcap
-  const [sortDir, setSortDir] = useState("desc"); // asc | desc
+  const [sortKey, setSortKey] = useState("score");
+  const [sortDir, setSortDir] = useState("desc");
 
-  // Drawer state
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
@@ -338,10 +203,7 @@ export default function Page() {
       try {
         setStatus({ loading: true, error: "" });
         const res = await fetch(COINGECKO_MARKETS_URL, { cache: "no-store" });
-
-        if (!res.ok) {
-          throw new Error(`CoinGecko error (${res.status})`);
-        }
+        if (!res.ok) throw new Error(`CoinGecko error (${res.status})`);
 
         const data = await res.json();
         if (cancelled) return;
@@ -364,7 +226,6 @@ export default function Page() {
     };
   }, []);
 
-  // Enrich coins with score + confidence + breakdown
   const enriched = useMemo(() => {
     return (coins || []).map((c) => {
       const breakdown = computeMomentumBreakdown(c);
@@ -434,9 +295,8 @@ export default function Page() {
   const selectedConfidence = selectedCoin?.confidence ?? null;
 
   function toggleSort(key) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
       setSortKey(key);
       setSortDir("desc");
     }
@@ -452,9 +312,7 @@ export default function Page() {
       <div className="mx-auto max-w-6xl px-5 py-8">
         <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Altcoin Momentum Dashboard
-            </h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Altcoin Momentum Dashboard</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-2xl leading-relaxed">
               Decision-support for novice → intermediate investors. Momentum summarizes recent trend conditions — it does{" "}
               <b>not</b> predict future price.
@@ -462,21 +320,16 @@ export default function Page() {
           </div>
 
           <div className="flex flex-col gap-2 sm:items-end">
-            <div className="flex items-center gap-2">
-              <input
-                className="w-full sm:w-80 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-                placeholder="Search coins (e.g., SOL, ARB, LINK)"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <div className="text-xs text-slate-500">
-              Tip: click any row to open “Why this score?”
-            </div>
+            <input
+              className="w-full sm:w-80 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+              placeholder="Search coins (e.g., SOL, ARB, LINK)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <div className="text-xs text-slate-500">Tip: click any row to open “Why this score?”</div>
           </div>
         </header>
 
-        {/* Top 3 */}
         <section className="mt-7">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-900">
@@ -503,9 +356,7 @@ export default function Page() {
                   <div className="flex items-center justify-between">
                     <div className="font-semibold truncate">
                       {c.name}{" "}
-                      <span className="text-slate-400 font-medium">
-                        ({c.symbol?.toUpperCase()})
-                      </span>
+                      <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
                     </div>
                     <Badge tone={tone}>{c.confidence?.label ?? "—"} confidence</Badge>
                   </div>
@@ -525,7 +376,6 @@ export default function Page() {
           </div>
         </section>
 
-        {/* Table */}
         <section className="mt-8">
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <div className="overflow-x-auto">
@@ -606,18 +456,14 @@ export default function Page() {
                       return (
                         <tr
                           key={c.id}
-                          className={`cursor-pointer hover:bg-slate-50 transition ${
-                            isTop3 ? "bg-emerald-50/30" : ""
-                          }`}
+                          className={`cursor-pointer hover:bg-slate-50 transition ${isTop3 ? "bg-emerald-50/30" : ""}`}
                           onClick={() => setSelectedId(c.id)}
                           title="Click for score explanation"
                         >
                           <td className="px-4 py-3">
                             <div className="font-semibold text-slate-900">
                               {c.name}{" "}
-                              <span className="text-slate-400 font-medium">
-                                ({c.symbol?.toUpperCase()})
-                              </span>
+                              <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
                               {isTop3 ? (
                                 <span className="ml-2 align-middle">
                                   <Badge tone="good">Top 3</Badge>
@@ -653,7 +499,6 @@ export default function Page() {
           </div>
         </section>
 
-        {/* Premium locked section */}
         <section className="mt-8">
           <div className="rounded-2xl border border-slate-200 p-5 bg-slate-50">
             <div className="flex items-center justify-between">
@@ -679,7 +524,6 @@ export default function Page() {
         </section>
       </div>
 
-      {/* Explainability Drawer */}
       <Drawer
         open={!!selectedId}
         onClose={() => setSelectedId(null)}
