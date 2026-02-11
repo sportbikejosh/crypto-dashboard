@@ -6,18 +6,19 @@ import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
 import { Star, RefreshCw } from "lucide-react";
 
 /**
- * Premium-feel improvements (calm UI)
- * - Watchlist summary cards
- * - Watchlist quick sort controls
- * - Only High confidence toggle
- * - Signal Quality legend + small tooltip
+ * Crypto Momentum Dashboard
+ * - Decision-support, not prediction
+ * - Calm, explainable UI
+ * - Auto-refresh + manual refresh
+ * - Watchlist (localStorage)
+ * - Premium UI elements locked
  */
 
 const PREMIUM_LOCKED_FEATURES = [
   "7-day momentum history chart",
   "Watchlist alerts (momentum threshold)",
   "Market regime context (risk-on / risk-off)",
-  "Side-by-side coin comparisons",
+  "Side-by-side asset comparisons",
 ];
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -119,16 +120,16 @@ function StarButton({ active, onClick, title }) {
       type="button"
       onClick={onClick}
       title={title}
+      aria-label={title}
       className={`group h-9 w-9 rounded-xl border flex items-center justify-center transition
         focus:outline-none focus:ring-2 focus:ring-slate-200
         ${active ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200 hover:bg-slate-50"}
       `}
-      aria-label={title}
     >
       <Star
-        className={`h-4 w-4 transition-transform duration-150 group-hover:scale-110
-          ${active ? "text-amber-700" : "text-slate-400"}
-        `}
+        className={`h-4 w-4 transition-transform duration-150 group-hover:scale-110 ${
+          active ? "text-amber-700" : "text-slate-400"
+        }`}
         strokeWidth={2}
         fill={active ? "currentColor" : "none"}
       />
@@ -172,9 +173,7 @@ function SignalLegend({ onWhy }) {
         <Badge tone="bad">Low: noisy</Badge>
       </div>
 
-      <div className="mt-3 text-xs text-slate-500">
-        Tip: “Only High confidence” reduces noise for newer investors.
-      </div>
+      <div className="mt-3 text-xs text-slate-500">Tip: “Only High confidence” reduces noise.</div>
     </div>
   );
 }
@@ -199,19 +198,19 @@ function WhyPanel({ open, onClose }) {
               <li className="flex gap-2">
                 <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
                 <span>
-                  <b>Medium:</b> some momentum, but mixed signals (consider smaller sizing)
+                  <b>Medium:</b> mixed signals (use extra caution)
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
                 <span>
-                  <b>Low:</b> weak or inconsistent signals (harder to rely on)
+                  <b>Low:</b> noisy conditions (harder to rely on)
                 </span>
               </li>
             </ul>
           </div>
           <div className="mt-3 text-xs text-slate-500">
-            This is decision-support, not a forecast. Always pair with your own risk management.
+            This is decision-support, not a forecast. Pair with your own risk management.
           </div>
         </div>
 
@@ -269,9 +268,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
             </div>
             <div className="mt-2 flex items-center gap-2">
               <Badge
-                tone={
-                  confidence?.label === "High" ? "good" : confidence?.label === "Medium" ? "warn" : "bad"
-                }
+                tone={confidence?.label === "High" ? "good" : confidence?.label === "Medium" ? "warn" : "bad"}
               >
                 Confidence: {confidence?.label ?? "—"}
               </Badge>
@@ -315,7 +312,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
               </div>
             </div>
             <p className="mt-3 text-xs text-slate-500 leading-relaxed">
-              These inputs summarize momentum conditions. They are not a guarantee of outcomes.
+              These inputs summarize conditions. They are not a guarantee of outcomes.
             </p>
           </div>
 
@@ -335,7 +332,6 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
             <div className="text-sm font-semibold text-slate-900">Reminder</div>
             <p className="mt-2 text-sm text-slate-700 leading-relaxed">
               This dashboard supports decisions by summarizing momentum conditions. It does <b>not</b> predict prices.
-              Use it as one input alongside your own research and risk management.
             </p>
           </div>
         </div>
@@ -399,10 +395,8 @@ export default function Page() {
   const [view, setView] = useState("all"); // "all" | "watchlist"
 
   const [watchIds, setWatchIds] = useState(() => new Set());
-
   const [watchSort, setWatchSort] = useState("score"); // score | change24 | change7 | name
   const [watchOnlyHigh, setWatchOnlyHigh] = useState(false);
-
   const [whyOpen, setWhyOpen] = useState(false);
 
   const inFlightRef = useRef(false);
@@ -516,12 +510,11 @@ export default function Page() {
   const baseList = useMemo(() => {
     if (view === "watchlist") {
       let items = watchlistItems;
-
       if (watchOnlyHigh) items = items.filter((c) => c.confidence?.label === "High");
 
       const sorted = [...items];
       sorted.sort((a, b) => {
-        const mult = -1; // descending
+        const mult = -1; // desc by default
         switch (watchSort) {
           case "change24":
             return (
@@ -627,10 +620,9 @@ export default function Page() {
       <div className="mx-auto max-w-6xl px-5 py-8">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Altcoin Momentum Dashboard</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Crypto Momentum Dashboard</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-2xl leading-relaxed">
-              Decision-support for novice → intermediate investors. Momentum summarizes recent trend conditions — it does{" "}
-              <b>not</b> predict future price.
+              Structured momentum analysis for digital asset markets — built for clarity, not prediction.
             </p>
 
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -643,7 +635,7 @@ export default function Page() {
             <div className="flex items-center gap-2 w-full sm:w-auto">
               <input
                 className="w-full sm:w-80 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-                placeholder="Search coins (e.g., SOL, ARB, LINK)"
+                placeholder="Search assets (e.g., BTC, ETH, SOL)"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -655,7 +647,10 @@ export default function Page() {
                 className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
                 title="Refresh data now"
               >
-                {isRefreshing || status.loading ? "Refreshing…" : "Refresh"}
+                <span className="inline-flex items-center gap-2">
+                  <RefreshCw className={`h-4 w-4 ${isRefreshing || status.loading ? "animate-spin" : ""}`} />
+                  {isRefreshing || status.loading ? "Refreshing…" : "Refresh"}
+                </span>
               </button>
             </div>
 
@@ -685,7 +680,7 @@ export default function Page() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="text-sm font-semibold text-slate-900">Watchlist Overview</div>
-                <div className="mt-1 text-sm text-slate-600">Calm summary of your tracked coins (saved on this device).</div>
+                <div className="mt-1 text-sm text-slate-600">Calm summary of tracked assets (saved on this device).</div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
@@ -709,7 +704,7 @@ export default function Page() {
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard title="Tracked coins" value={watchlistSummary.count} sub="Watchlist items" />
+              <StatCard title="Tracked assets" value={watchlistSummary.count} sub="Watchlist items" />
               <StatCard title="Avg Momentum" value={watchlistSummary.avgScore} sub="0–100" />
               <StatCard
                 title="High confidence"
@@ -737,7 +732,9 @@ export default function Page() {
                       {watchlistSummary.best24 ? watchlistSummary.best24.name : "—"}
                     </div>
                     <div className="mt-1 text-sm text-slate-600">
-                      {watchlistSummary.best24 ? formatPct(watchlistSummary.best24.price_change_percentage_24h_in_currency) : ""}
+                      {watchlistSummary.best24
+                        ? formatPct(watchlistSummary.best24.price_change_percentage_24h_in_currency)
+                        : ""}
                     </div>
                   </div>
 
@@ -747,14 +744,14 @@ export default function Page() {
                       {watchlistSummary.worst24 ? watchlistSummary.worst24.name : "—"}
                     </div>
                     <div className="mt-1 text-sm text-slate-600">
-                      {watchlistSummary.worst24 ? formatPct(watchlistSummary.worst24.price_change_percentage_24h_in_currency) : ""}
+                      {watchlistSummary.worst24
+                        ? formatPct(watchlistSummary.worst24.price_change_percentage_24h_in_currency)
+                        : ""}
                     </div>
                   </div>
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">
-                  Tip: “Only High confidence” is a quick way to reduce noise.
-                </p>
+                <p className="mt-3 text-xs text-slate-500">Tip: “Only High confidence” is a quick way to reduce noise.</p>
               </div>
 
               <LockedAlertsPanel />
@@ -813,7 +810,7 @@ export default function Page() {
                     <th className="px-4 py-3 text-left font-semibold">Watch</th>
                     <th className="px-4 py-3 text-left font-semibold">
                       <button onClick={() => toggleSort("name")} className="hover:text-slate-900">
-                        Coin{view === "watchlist" ? "" : sortHint("name")}
+                        Asset{view === "watchlist" ? "" : sortHint("name")}
                       </button>
                     </th>
                     <th className="px-4 py-3 text-right font-semibold">
@@ -869,7 +866,7 @@ export default function Page() {
                           <div className="space-y-2">
                             <div className="text-sm font-semibold text-slate-900">Your watchlist is empty</div>
                             <div className="text-sm text-slate-600">
-                              Go to the <b>All</b> tab and star a few coins to track them here.
+                              Go to the <b>All</b> tab and star a few assets to track them here.
                             </div>
                           </div>
                         ) : (
@@ -964,7 +961,13 @@ export default function Page() {
         </section>
       </div>
 
-      <Drawer open={!!selectedId} onClose={() => setSelectedId(null)} coin={selectedCoin} breakdown={selectedBreakdown} confidence={selectedConfidence} />
+      <Drawer
+        open={!!selectedId}
+        onClose={() => setSelectedId(null)}
+        coin={selectedCoin}
+        breakdown={selectedBreakdown}
+        confidence={selectedConfidence}
+      />
     </main>
   );
 }
