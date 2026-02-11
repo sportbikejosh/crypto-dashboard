@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 
 /**
- * Crypto Altcoin Momentum Dashboard (MVP + Explainability Drawer)
- * Now uses a server-side cached endpoint: /api/markets
+ * Dashboard (Client) -> fetches from cached server endpoint /api/markets
+ * - Calm auto-refresh every 60s
+ * - Manual refresh button
  */
 
 const PREMIUM_LOCKED_FEATURES = [
@@ -14,6 +15,8 @@ const PREMIUM_LOCKED_FEATURES = [
   "Market regime context (risk-on / risk-off)",
   "Side-by-side coin comparisons",
 ];
+
+const REFRESH_INTERVAL_MS = 60_000;
 
 function formatMoney(n) {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
@@ -184,46 +187,60 @@ export default function Page() {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("score");
   const [sortDir, setSortDir] = useState("desc");
-
   const [selectedId, setSelectedId] = useState(null);
 
-  // Optional: show when server says it fetched the data
   const [fetchedAt, setFetchedAt] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Prevent overlapping refresh calls
+  const inFlightRef = useRef(false);
 
-    async function load() {
-      try {
+  async function load({ showSpinner } = { showSpinner: true }) {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+
+    try {
+      if (showSpinner) {
         setStatus({ loading: true, error: "" });
-
-        // Call OUR cached API route instead of CoinGecko directly
-        const res = await fetch("/api/markets", { cache: "no-store" });
-
-        if (!res.ok) {
-          throw new Error(`API error (${res.status})`);
-        }
-
-        const json = await res.json();
-        if (cancelled) return;
-
-        const data = Array.isArray(json?.data) ? json.data : [];
-        setCoins(data);
-        setFetchedAt(json?.fetchedAt || "");
-        setStatus({ loading: false, error: "" });
-      } catch (e) {
-        if (cancelled) return;
-        setStatus({
-          loading: false,
-          error: "Could not load data. Try refreshing in a moment.",
-        });
+      } else {
+        setIsRefreshing(true);
+        setStatus((s) => ({ ...s, error: "" }));
       }
-    }
 
-    load();
-    return () => {
-      cancelled = true;
-    };
+      const res = await fetch("/api/markets", { cache: "no-store" });
+      if (!res.ok) throw new Error(`API error (${res.status})`);
+
+      const json = await res.json();
+      const data = Array.isArray(json?.data) ? json.data : [];
+
+      setCoins(data);
+      setFetchedAt(json?.fetchedAt || "");
+      setStatus({ loading: false, error: "" });
+    } catch (e) {
+      setStatus((s) => ({
+        loading: false,
+        error: showSpinner ? "Could not load data. Try refreshing in a moment." : s.error,
+      }));
+    } finally {
+      setIsRefreshing(false);
+      inFlightRef.current = false;
+    }
+  }
+
+  // Initial load
+  useEffect(() => {
+    load({ showSpinner: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto refresh every 60s
+  useEffect(() => {
+    const id = setInterval(() => {
+      load({ showSpinner: false });
+    }, REFRESH_INTERVAL_MS);
+
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const enriched = useMemo(() => {
@@ -310,7 +327,7 @@ export default function Page() {
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="mx-auto max-w-6xl px-5 py-8">
-        <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Altcoin Momentum Dashboard</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-2xl leading-relaxed">
@@ -318,40 +335,50 @@ export default function Page() {
               <b>not</b> predict future price.
             </p>
 
-            {fetchedAt ? (
-              <div className="mt-2 text-xs text-slate-500">
-                Data last refreshed (server): {formatTime(fetchedAt)}
-              </div>
-            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              {fetchedAt ? <span>Last refreshed (server): {formatTime(fetchedAt)}</span> : null}
+              {isRefreshing ? (
+                <span className="text-slate-400">• Updating…</span>
+              ) : (
+                <span className="text-slate-400">• Auto-refresh: 60s</span>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:items-end">
-            <input
-              className="w-full sm:w-80 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-              placeholder="Search coins (e.g., SOL, ARB, LINK)"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <input
+                className="w-full sm:w-80 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                placeholder="Search coins (e.g., SOL, ARB, LINK)"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+
+              <button
+                type="button"
+                onClick={() => load({ showSpinner: false })}
+                disabled={isRefreshing || status.loading}
+                className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Refresh data now"
+              >
+                {isRefreshing || status.loading ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+
             <div className="text-xs text-slate-500">Tip: click any row to open “Why this score?”</div>
           </div>
         </header>
 
         <section className="mt-7">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              Top 3 Momentum Opportunities (signal summary)
-            </h2>
+            <h2 className="text-sm font-semibold text-slate-900">Top 3 Momentum Opportunities (signal summary)</h2>
             <span className="text-xs text-slate-500">Not investment advice</span>
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             {top3.map((c) => {
               const tone =
-                c.confidence?.label === "High"
-                  ? "good"
-                  : c.confidence?.label === "Medium"
-                  ? "warn"
-                  : "bad";
+                c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
 
               return (
                 <button
@@ -361,8 +388,7 @@ export default function Page() {
                 >
                   <div className="flex items-center justify-between">
                     <div className="font-semibold truncate">
-                      {c.name}{" "}
-                      <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+                      {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
                     </div>
                     <Badge tone={tone}>{c.confidence?.label ?? "—"} confidence</Badge>
                   </div>
@@ -373,9 +399,7 @@ export default function Page() {
                     <span className="mx-2 text-slate-300">•</span>
                     7d: <span className="font-medium">{formatPct(c.price_change_percentage_7d_in_currency)}</span>
                   </div>
-                  <div className="mt-2 text-xs text-slate-500 line-clamp-2">
-                    {c.breakdown?.drivers?.[0] ?? ""}
-                  </div>
+                  <div className="mt-2 text-xs text-slate-500 line-clamp-2">{c.breakdown?.drivers?.[0] ?? ""}</div>
                 </button>
               );
             })}
@@ -451,12 +475,7 @@ export default function Page() {
                     !status.error &&
                     sorted.map((c) => {
                       const confidenceTone =
-                        c.confidence?.label === "High"
-                          ? "good"
-                          : c.confidence?.label === "Medium"
-                          ? "warn"
-                          : "bad";
-
+                        c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
                       const isTop3 = top3.some((t) => t.id === c.id);
 
                       return (
@@ -468,8 +487,7 @@ export default function Page() {
                         >
                           <td className="px-4 py-3">
                             <div className="font-semibold text-slate-900">
-                              {c.name}{" "}
-                              <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+                              {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
                               {isTop3 ? (
                                 <span className="ml-2 align-middle">
                                   <Badge tone="good">Top 3</Badge>
