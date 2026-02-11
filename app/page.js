@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
+import { Star, RefreshCw } from "lucide-react";
 
 /**
  * Premium-feel improvements (calm UI)
@@ -118,14 +119,19 @@ function StarButton({ active, onClick, title }) {
       type="button"
       onClick={onClick}
       title={title}
-      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition ${
-        active
-          ? "bg-amber-50 border-amber-200 text-amber-700"
-          : "bg-white border-slate-200 text-slate-400 hover:bg-slate-50"
-      }`}
+      className={`group h-9 w-9 rounded-xl border flex items-center justify-center transition
+        focus:outline-none focus:ring-2 focus:ring-slate-200
+        ${active ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200 hover:bg-slate-50"}
+      `}
       aria-label={title}
     >
-      <span className="text-base leading-none">{active ? "★" : "☆"}</span>
+      <Star
+        className={`h-4 w-4 transition-transform duration-150 group-hover:scale-110
+          ${active ? "text-amber-700" : "text-slate-400"}
+        `}
+        strokeWidth={2}
+        fill={active ? "currentColor" : "none"}
+      />
     </button>
   );
 }
