@@ -5,15 +5,8 @@ import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 
 /**
  * Crypto Altcoin Momentum Dashboard (MVP + Explainability Drawer)
- * - Decision-support (not prediction)
- * - Explainability > raw data
- * - Calm, professional UI
- *
- * Data: CoinGecko /coins/markets (price + 24h/7d/30d %)
+ * Now uses a server-side cached endpoint: /api/markets
  */
-
-const COINGECKO_MARKETS_URL =
-  "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d,30d";
 
 const PREMIUM_LOCKED_FEATURES = [
   "7-day momentum history chart",
@@ -36,6 +29,16 @@ function formatPct(n) {
   return `${sign}${num.toFixed(2)}%`;
 }
 
+function formatTime(ts) {
+  if (!ts) return "";
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString();
+  } catch {
+    return "";
+  }
+}
+
 function Badge({ children, tone = "neutral" }) {
   const toneClass =
     tone === "good"
@@ -47,9 +50,7 @@ function Badge({ children, tone = "neutral" }) {
       : "bg-slate-50 text-slate-700 border-slate-200";
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}
-    >
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}>
       {children}
     </span>
   );
@@ -74,9 +75,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
                 {coin?.symbol?.toUpperCase()?.slice(0, 4) ?? "—"}
               </div>
               <div className="min-w-0">
-                <div className="text-lg font-semibold text-slate-900 truncate">
-                  {coin?.name ?? "—"}
-                </div>
+                <div className="text-lg font-semibold text-slate-900 truncate">{coin?.name ?? "—"}</div>
                 <div className="text-sm text-slate-500 truncate">
                   {coin?.symbol?.toUpperCase() ?? "—"} • {formatMoney(coin?.current_price)}
                 </div>
@@ -112,9 +111,7 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
               </Badge>
               <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
             </div>
-            <p className="mt-3 text-sm text-slate-700 leading-relaxed">
-              {confidence?.explanation ?? ""}
-            </p>
+            <p className="mt-3 text-sm text-slate-700 leading-relaxed">{confidence?.explanation ?? ""}</p>
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4">
@@ -134,21 +131,15 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
             <div className="mt-3 grid grid-cols-2 gap-3">
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">24h %</div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {formatPct(breakdown?.inputs?.c24)}
-                </div>
+                <div className="text-sm font-semibold text-slate-900">{formatPct(breakdown?.inputs?.c24)}</div>
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">7d %</div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {formatPct(breakdown?.inputs?.c7)}
-                </div>
+                <div className="text-sm font-semibold text-slate-900">{formatPct(breakdown?.inputs?.c7)}</div>
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">30d %</div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {formatPct(breakdown?.inputs?.c30)}
-                </div>
+                <div className="text-sm font-semibold text-slate-900">{formatPct(breakdown?.inputs?.c30)}</div>
               </div>
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <div className="text-xs text-slate-500">Choppiness proxy</div>
@@ -196,26 +187,35 @@ export default function Page() {
 
   const [selectedId, setSelectedId] = useState(null);
 
+  // Optional: show when server says it fetched the data
+  const [fetchedAt, setFetchedAt] = useState("");
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
         setStatus({ loading: true, error: "" });
-        const res = await fetch(COINGECKO_MARKETS_URL, { cache: "no-store" });
-        if (!res.ok) throw new Error(`CoinGecko error (${res.status})`);
 
-        const data = await res.json();
+        // Call OUR cached API route instead of CoinGecko directly
+        const res = await fetch("/api/markets", { cache: "no-store" });
+
+        if (!res.ok) {
+          throw new Error(`API error (${res.status})`);
+        }
+
+        const json = await res.json();
         if (cancelled) return;
 
-        setCoins(Array.isArray(data) ? data : []);
+        const data = Array.isArray(json?.data) ? json.data : [];
+        setCoins(data);
+        setFetchedAt(json?.fetchedAt || "");
         setStatus({ loading: false, error: "" });
       } catch (e) {
         if (cancelled) return;
         setStatus({
           loading: false,
-          error:
-            "Could not load data. CoinGecko may be rate limiting requests. Try refreshing in a moment.",
+          error: "Could not load data. Try refreshing in a moment.",
         });
       }
     }
@@ -310,13 +310,19 @@ export default function Page() {
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="mx-auto max-w-6xl px-5 py-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Altcoin Momentum Dashboard</h1>
             <p className="mt-2 text-sm text-slate-600 max-w-2xl leading-relaxed">
               Decision-support for novice → intermediate investors. Momentum summarizes recent trend conditions — it does{" "}
               <b>not</b> predict future price.
             </p>
+
+            {fetchedAt ? (
+              <div className="mt-2 text-xs text-slate-500">
+                Data last refreshed (server): {formatTime(fetchedAt)}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-col gap-2 sm:items-end">
