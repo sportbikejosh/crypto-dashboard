@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
+import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
 
 /**
  * Dashboard (Client) -> fetches from cached server endpoint /api/markets
  * - Calm auto-refresh every 60s
  * - Manual refresh button
+ * - Watchlist (localStorage)
+ * - Premium alerts UI visually locked (no auth yet)
  */
 
 const PREMIUM_LOCKED_FEATURES = [
@@ -56,6 +59,40 @@ function Badge({ children, tone = "neutral" }) {
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${toneClass}`}>
       {children}
     </span>
+  );
+}
+
+function TabButton({ active, children, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl px-3 py-2 text-sm border transition ${
+        active
+          ? "bg-slate-900 text-white border-slate-900"
+          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StarButton({ active, onClick, title }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition ${
+        active
+          ? "bg-amber-50 border-amber-200 text-amber-700"
+          : "bg-white border-slate-200 text-slate-400 hover:bg-slate-50"
+      }`}
+      aria-label={title}
+    >
+      <span className="text-base leading-none">{active ? "★" : "☆"}</span>
+    </button>
   );
 }
 
@@ -181,19 +218,83 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
   );
 }
 
+function LockedAlertsPanel() {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-900">Alerts (Premium)</div>
+        <span className="text-xs text-slate-400">🔒 Locked</span>
+      </div>
+
+      <p className="mt-2 text-sm text-slate-600">
+        Set simple rules like “Momentum crosses above X” or “Confidence becomes High.”
+      </p>
+
+      <div className="mt-3 space-y-3 opacity-70">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-sm text-slate-700">Momentum crosses above</div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">
+              70
+            </div>
+            <div className="text-xs text-slate-400">🔒</div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-sm text-slate-700">Confidence becomes</div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">
+              High
+            </div>
+            <div className="text-xs text-slate-400">🔒</div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          disabled
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 cursor-not-allowed"
+        >
+          Save Alerts (Premium)
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Page() {
   const [coins, setCoins] = useState([]);
   const [status, setStatus] = useState({ loading: true, error: "" });
+
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("score");
   const [sortDir, setSortDir] = useState("desc");
+
   const [selectedId, setSelectedId] = useState(null);
 
   const [fetchedAt, setFetchedAt] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // View: all vs watchlist
+  const [view, setView] = useState("all"); // "all" | "watchlist"
+
+  // Watchlist: stored as Set of coin ids
+  const [watchIds, setWatchIds] = useState(() => new Set());
+
   // Prevent overlapping refresh calls
   const inFlightRef = useRef(false);
+
+  // Load watchlist from localStorage on first mount
+  useEffect(() => {
+    const ids = loadWatchlist();
+    setWatchIds(new Set(ids));
+  }, []);
+
+  // Persist watchlist whenever it changes
+  useEffect(() => {
+    saveWatchlist(Array.from(watchIds));
+  }, [watchIds]);
 
   async function load({ showSpinner } = { showSpinner: true }) {
     if (inFlightRef.current) return;
@@ -243,6 +344,15 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function toggleWatch(id) {
+    setWatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   const enriched = useMemo(() => {
     return (coins || []).map((c) => {
       const breakdown = computeMomentumBreakdown(c);
@@ -251,15 +361,24 @@ export default function Page() {
     });
   }, [coins]);
 
+  const watchlistCount = watchIds.size;
+
+  const baseList = useMemo(() => {
+    if (view === "watchlist") {
+      return enriched.filter((c) => watchIds.has(c.id));
+    }
+    return enriched;
+  }, [enriched, view, watchIds]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return enriched;
-    return enriched.filter((c) => {
+    if (!q) return baseList;
+    return baseList.filter((c) => {
       const name = (c.name || "").toLowerCase();
       const sym = (c.symbol || "").toLowerCase();
       return name.includes(q) || sym.includes(q);
     });
-  }, [enriched, query]);
+  }, [baseList, query]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -298,10 +417,11 @@ export default function Page() {
     return arr;
   }, [filtered, sortKey, sortDir]);
 
+  // Top 3 within current view (All or Watchlist)
   const top3 = useMemo(() => {
-    const byScore = [...enriched].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const byScore = [...baseList].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     return byScore.slice(0, 3);
-  }, [enriched]);
+  }, [baseList]);
 
   const selectedCoin = useMemo(() => {
     if (!selectedId) return null;
@@ -369,16 +489,39 @@ export default function Page() {
           </div>
         </header>
 
-        <section className="mt-7">
+        {/* Tabs */}
+        <section className="mt-6 flex items-center gap-2">
+          <TabButton active={view === "all"} onClick={() => setView("all")}>
+            All
+          </TabButton>
+
+          <TabButton active={view === "watchlist"} onClick={() => setView("watchlist")}>
+            Watchlist{" "}
+            <span className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
+              view === "watchlist" ? "bg-white/15" : "bg-slate-100 text-slate-700"
+            }`}>
+              {watchlistCount}
+            </span>
+          </TabButton>
+        </section>
+
+        {/* Top 3 */}
+        <section className="mt-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">Top 3 Momentum Opportunities (signal summary)</h2>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Top 3 Momentum Opportunities ({view === "watchlist" ? "Watchlist" : "All"})
+            </h2>
             <span className="text-xs text-slate-500">Not investment advice</span>
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             {top3.map((c) => {
               const tone =
-                c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
+                c.confidence?.label === "High"
+                  ? "good"
+                  : c.confidence?.label === "Medium"
+                  ? "warn"
+                  : "bad";
 
               return (
                 <button
@@ -386,9 +529,10 @@ export default function Page() {
                   onClick={() => setSelectedId(c.id)}
                   className="text-left rounded-2xl border border-slate-200 p-4 hover:bg-slate-50 transition"
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <div className="font-semibold truncate">
-                      {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+                      {c.name}{" "}
+                      <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
                     </div>
                     <Badge tone={tone}>{c.confidence?.label ?? "—"} confidence</Badge>
                   </div>
@@ -399,19 +543,51 @@ export default function Page() {
                     <span className="mx-2 text-slate-300">•</span>
                     7d: <span className="font-medium">{formatPct(c.price_change_percentage_7d_in_currency)}</span>
                   </div>
-                  <div className="mt-2 text-xs text-slate-500 line-clamp-2">{c.breakdown?.drivers?.[0] ?? ""}</div>
+                  <div className="mt-2 text-xs text-slate-500 line-clamp-2">
+                    {c.breakdown?.drivers?.[0] ?? ""}
+                  </div>
                 </button>
               );
             })}
           </div>
         </section>
 
+        {/* Watchlist panel (only when view=watchlist) */}
+        {view === "watchlist" ? (
+          <section className="mt-8">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Watchlist Controls</h3>
+              <Badge tone="neutral">Premium locked alerts</Badge>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">How to use Watchlist</div>
+                <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                    <span>Star coins you want to monitor. Your watchlist is saved on this device.</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                    <span>Use Momentum + Confidence together. High confidence ≠ guaranteed gains.</span>
+                  </li>
+                </ul>
+              </div>
+
+              <LockedAlertsPanel />
+            </div>
+          </section>
+        ) : null}
+
+        {/* Table */}
         <section className="mt-8">
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-slate-600">
                   <tr>
+                    <th className="px-4 py-3 text-left font-semibold">Watch</th>
                     <th className="px-4 py-3 text-left font-semibold">
                       <button onClick={() => toggleSort("name")} className="hover:text-slate-900">
                         Coin{sortHint("name")}
@@ -449,7 +625,7 @@ export default function Page() {
                 <tbody className="divide-y divide-slate-200">
                   {status.loading && (
                     <tr>
-                      <td className="px-4 py-6 text-slate-600" colSpan={7}>
+                      <td className="px-4 py-6 text-slate-600" colSpan={8}>
                         Loading market data…
                       </td>
                     </tr>
@@ -457,7 +633,7 @@ export default function Page() {
 
                   {!status.loading && status.error && (
                     <tr>
-                      <td className="px-4 py-6 text-rose-700" colSpan={7}>
+                      <td className="px-4 py-6 text-rose-700" colSpan={8}>
                         {status.error}
                       </td>
                     </tr>
@@ -465,8 +641,10 @@ export default function Page() {
 
                   {!status.loading && !status.error && sorted.length === 0 && (
                     <tr>
-                      <td className="px-4 py-6 text-slate-600" colSpan={7}>
-                        No matches found.
+                      <td className="px-4 py-6 text-slate-600" colSpan={8}>
+                        {view === "watchlist"
+                          ? "Your watchlist is empty. Star a few coins from the All tab."
+                          : "No matches found."}
                       </td>
                     </tr>
                   )}
@@ -475,30 +653,51 @@ export default function Page() {
                     !status.error &&
                     sorted.map((c) => {
                       const confidenceTone =
-                        c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
-                      const isTop3 = top3.some((t) => t.id === c.id);
+                        c.confidence?.label === "High"
+                          ? "good"
+                          : c.confidence?.label === "Medium"
+                          ? "warn"
+                          : "bad";
+
+                      const isWatched = watchIds.has(c.id);
 
                       return (
                         <tr
                           key={c.id}
-                          className={`cursor-pointer hover:bg-slate-50 transition ${isTop3 ? "bg-emerald-50/30" : ""}`}
+                          className="cursor-pointer hover:bg-slate-50 transition"
                           onClick={() => setSelectedId(c.id)}
                           title="Click for score explanation"
                         >
                           <td className="px-4 py-3">
-                            <div className="font-semibold text-slate-900">
-                              {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
-                              {isTop3 ? (
-                                <span className="ml-2 align-middle">
-                                  <Badge tone="good">Top 3</Badge>
-                                </span>
-                              ) : null}
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation(); // prevents opening drawer
+                              }}
+                            >
+                              <StarButton
+                                active={isWatched}
+                                title={isWatched ? "Remove from watchlist" : "Add to watchlist"}
+                                onClick={() => toggleWatch(c.id)}
+                              />
                             </div>
                           </td>
+
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-900">
+                              {c.name}{" "}
+                              <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+                            </div>
+                          </td>
+
                           <td className="px-4 py-3 text-right">{formatMoney(c.current_price)}</td>
-                          <td className="px-4 py-3 text-right">{formatPct(c.price_change_percentage_24h_in_currency)}</td>
-                          <td className="px-4 py-3 text-right">{formatPct(c.price_change_percentage_7d_in_currency)}</td>
+                          <td className="px-4 py-3 text-right">
+                            {formatPct(c.price_change_percentage_24h_in_currency)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {formatPct(c.price_change_percentage_7d_in_currency)}
+                          </td>
                           <td className="px-4 py-3 text-right font-semibold">{c.score}</td>
+
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <Badge tone={confidenceTone}>{c.confidence?.label ?? "—"}</Badge>
@@ -511,6 +710,7 @@ export default function Page() {
                               </span>
                             </div>
                           </td>
+
                           <td className="px-4 py-3 text-right text-slate-700">
                             {c.market_cap ? "$" + Number(c.market_cap).toLocaleString() : "—"}
                           </td>
@@ -523,6 +723,7 @@ export default function Page() {
           </div>
         </section>
 
+        {/* Premium locked section */}
         <section className="mt-8">
           <div className="rounded-2xl border border-slate-200 p-5 bg-slate-50">
             <div className="flex items-center justify-between">
