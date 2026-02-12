@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
 import { loadPreferences, resetPreferences, savePreferences } from "../lib/preferences";
-import { Star, RefreshCw, ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
+import { Star, RefreshCw, ChevronLeft, ChevronRight, Filter, X, Link2 } from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
 
+// ---------- utils ----------
 function formatMoney(n) {
   if (!n && n !== 0) return "—";
   if (n >= 1) return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
@@ -20,6 +21,57 @@ function formatPct(n) {
   return `${sign}${Number(n).toFixed(2)}%`;
 }
 
+function clampEnum(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function clampNum(value, allowed, fallback) {
+  const n = Number(value);
+  return allowed.includes(n) ? n : fallback;
+}
+
+function clampPage(value, fallback = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.floor(n));
+}
+
+function toBool(value) {
+  // Accept: "1", "true", "yes", "on"
+  if (value == null) return null;
+  const v = String(value).toLowerCase().trim();
+  if (["1", "true", "yes", "on"].includes(v)) return true;
+  if (["0", "false", "no", "off"].includes(v)) return false;
+  return null;
+}
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall back
+  }
+
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+// ---------- UI bits ----------
 function Badge({ children, tone = "neutral" }) {
   const map = {
     good: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -129,7 +181,7 @@ export default function Page() {
   const [status, setStatus] = useState({ loading: true, error: "" });
 
   const [query, setQuery] = useState("");
-  const [view, setView] = useState("all");
+  const [view, setView] = useState("all"); // all | watchlist
 
   const [watchIds, setWatchIds] = useState(new Set());
 
@@ -143,32 +195,79 @@ export default function Page() {
   // Global filter
   const [onlyHigh, setOnlyHigh] = useState(false);
 
+  // Share feedback
+  const [shareStatus, setShareStatus] = useState(""); // "", "copied", "failed"
+
   const inFlight = useRef(false);
 
   // Preferences (persist)
   const [prefs, setPrefs] = useState(null);
 
-  // Keep original defaults so "Clear filters" can reset cleanly
+  // Defaults for "Clear filters" (based on prefs at load time)
   const defaultsRef = useRef({ onlyHigh: false });
 
+  // URL sync
+  const hydratedRef = useRef(false);
+  const lastUrlRef = useRef("");
+
+  // --------- initial load: watchlist + prefs + URL override ----------
   useEffect(() => {
     setWatchIds(new Set(loadWatchlist()));
 
     const p = loadPreferences();
     setPrefs(p);
 
-    setMarketLimit(p.marketLimit);
-    setPageSize(p.pageSize);
+    // Base defaults from prefs
+    const baseMarketLimit = clampNum(p.marketLimit, [50, 100, 250], 250);
+    const basePageSize = clampNum(p.pageSize, [25, 50], 25);
+    const baseOnlyHigh = !!p.watchOnlyHighDefault;
 
-    const initialOnlyHigh = !!p.watchOnlyHighDefault;
-    setOnlyHigh(initialOnlyHigh);
-    defaultsRef.current.onlyHigh = initialOnlyHigh;
+    defaultsRef.current.onlyHigh = baseOnlyHigh;
+
+    // URL overrides (share links)
+    let urlView = null;
+    let urlQ = null;
+    let urlHigh = null;
+    let urlLimit = null;
+    let urlSize = null;
+    let urlPage = null;
+
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      urlView = sp.get("view");
+      urlQ = sp.get("q");
+      urlHigh = toBool(sp.get("high"));
+      urlLimit = sp.get("limit");
+      urlSize = sp.get("size");
+      urlPage = sp.get("page");
+    } catch {
+      // ignore
+    }
+
+    setView(clampEnum(urlView, ["all", "watchlist"], "all"));
+
+    setQuery(typeof urlQ === "string" ? urlQ : "");
+
+    const nextOnlyHigh = urlHigh === null ? baseOnlyHigh : urlHigh;
+    setOnlyHigh(nextOnlyHigh);
+
+    const nextLimit = clampNum(urlLimit, [50, 100, 250], baseMarketLimit);
+    setMarketLimit(nextLimit);
+
+    const nextSize = clampNum(urlSize, [25, 50], basePageSize);
+    setPageSize(nextSize);
+
+    setPage(clampPage(urlPage, 1));
+
+    hydratedRef.current = true;
   }, []);
 
+  // --------- persist watchlist ----------
   useEffect(() => {
     saveWatchlist(Array.from(watchIds));
   }, [watchIds]);
 
+  // --------- persist prefs ----------
   useEffect(() => {
     if (!prefs) return;
     savePreferences(prefs);
@@ -186,15 +285,28 @@ export default function Page() {
     const p = loadPreferences();
     setPrefs(p);
 
-    setMarketLimit(p.marketLimit);
-    setPageSize(p.pageSize);
+    const baseMarketLimit = clampNum(p.marketLimit, [50, 100, 250], 250);
+    const basePageSize = clampNum(p.pageSize, [25, 50], 25);
+    const baseOnlyHigh = !!p.watchOnlyHighDefault;
 
-    const initialOnlyHigh = !!p.watchOnlyHighDefault;
-    setOnlyHigh(initialOnlyHigh);
-    defaultsRef.current.onlyHigh = initialOnlyHigh;
+    setMarketLimit(baseMarketLimit);
+    setPageSize(basePageSize);
+
+    setOnlyHigh(baseOnlyHigh);
+    defaultsRef.current.onlyHigh = baseOnlyHigh;
 
     setQuery("");
     setPage(1);
+
+    // Also clear URL params to match a clean “fresh” state
+    try {
+      const url = new URL(window.location.href);
+      url.search = "";
+      window.history.replaceState({}, "", url.toString());
+      lastUrlRef.current = url.toString();
+    } catch {
+      // ignore
+    }
   }
 
   function clearFilters() {
@@ -203,6 +315,7 @@ export default function Page() {
     setPage(1);
   }
 
+  // --------- data loading ----------
   async function load(showSpinner = true) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -236,6 +349,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketLimit]);
 
+  // --------- compute model outputs ----------
   const enriched = useMemo(() => {
     return coins.map((c) => {
       const breakdown = computeMomentumBreakdown(c);
@@ -294,6 +408,43 @@ export default function Page() {
     });
   }
 
+  // --------- URL sync + Share URL builder ----------
+  const shareUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    const url = new URL(window.location.href);
+    const sp = new URLSearchParams();
+
+    sp.set("view", view);
+    if (query.trim()) sp.set("q", query.trim());
+    sp.set("high", onlyHigh ? "1" : "0");
+    sp.set("limit", String(marketLimit));
+    sp.set("size", String(pageSize));
+    sp.set("page", String(page));
+
+    url.search = sp.toString();
+    return url.toString();
+  }, [view, query, onlyHigh, marketLimit, pageSize, page]);
+
+  // Keep the browser URL in sync (no reload) so the address bar is share-ready
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    try {
+      if (shareUrl && shareUrl !== lastUrlRef.current) {
+        window.history.replaceState({}, "", shareUrl);
+        lastUrlRef.current = shareUrl;
+      }
+    } catch {
+      // ignore
+    }
+  }, [shareUrl]);
+
+  async function handleShare() {
+    const ok = await copyToClipboard(shareUrl);
+    setShareStatus(ok ? "copied" : "failed");
+    window.clearTimeout(handleShare._t);
+    handleShare._t = window.setTimeout(() => setShareStatus(""), 1600);
+  }
+
   const hasActiveFilters = query.trim().length > 0 || onlyHigh !== defaultsRef.current.onlyHigh;
 
   return (
@@ -309,7 +460,7 @@ export default function Page() {
           </div>
 
           <div className="flex flex-col gap-2 sm:items-end">
-            <div className="flex gap-3 items-center">
+            <div className="flex flex-wrap gap-2 items-center justify-end">
               <input
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                 placeholder="Search..."
@@ -323,9 +474,19 @@ export default function Page() {
               <button
                 onClick={() => load(false)}
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
+                title="Refresh data"
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
                 Refresh
+              </button>
+
+              <button
+                onClick={handleShare}
+                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
+                title="Copy a shareable link with your current filters"
+              >
+                <Link2 className="h-4 w-4" />
+                Share link
               </button>
 
               <button
@@ -336,6 +497,13 @@ export default function Page() {
                 Reset preferences
               </button>
             </div>
+
+            {/* Share micro-feedback */}
+            {shareStatus ? (
+              <div className={`text-xs ${shareStatus === "copied" ? "text-emerald-700" : "text-rose-700"}`}>
+                {shareStatus === "copied" ? "Link copied to clipboard." : "Couldn’t copy automatically — try again."}
+              </div>
+            ) : null}
 
             <div className="flex flex-wrap gap-2 items-center justify-end">
               <Toggle
@@ -392,9 +560,7 @@ export default function Page() {
             <div className="flex items-center gap-2 text-sm text-slate-700">
               <Filter className="h-4 w-4 text-slate-500" />
               <span className="font-medium">Filters</span>
-              <span className="text-xs text-slate-500">
-                {view === "watchlist" ? "Watchlist view" : "All assets view"}
-              </span>
+              <span className="text-xs text-slate-500">{view === "watchlist" ? "Watchlist view" : "All assets view"}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -454,7 +620,10 @@ export default function Page() {
         {/* Tabs */}
         <div className="mt-6 flex gap-3">
           <button
-            onClick={() => setView("all")}
+            onClick={() => {
+              setView("all");
+              setPage(1);
+            }}
             className={`px-4 py-2 rounded-xl border ${
               view === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"
             }`}
@@ -462,7 +631,10 @@ export default function Page() {
             All
           </button>
           <button
-            onClick={() => setView("watchlist")}
+            onClick={() => {
+              setView("watchlist");
+              setPage(1);
+            }}
             className={`px-4 py-2 rounded-xl border ${
               view === "watchlist"
                 ? "bg-slate-900 text-white border-slate-900"
@@ -474,13 +646,13 @@ export default function Page() {
         </div>
 
         {/* Watchlist Overview */}
-        {view === "watchlist" && (
+        {view === "watchlist" ? (
           <div className="mt-6 grid sm:grid-cols-3 gap-4">
             <StatCard title="Tracked Assets" value={watchSummary.count} />
             <StatCard title="Avg Momentum" value={watchSummary.avg} sub="0–100 scale" />
             <StatCard title="High Confidence" value={watchSummary.high} sub={onlyHigh ? "Filter: Only High" : ""} />
           </div>
-        )}
+        ) : null}
 
         {/* Table */}
         <div className="mt-6 border border-slate-200 rounded-2xl overflow-hidden">
