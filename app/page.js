@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
+import { loadPreferences, resetPreferences, savePreferences } from "../lib/preferences";
 import { Star, RefreshCw } from "lucide-react";
 
 /**
@@ -11,6 +12,7 @@ import { Star, RefreshCw } from "lucide-react";
  * - Calm, explainable UI
  * - Auto-refresh + manual refresh
  * - Watchlist (localStorage)
+ * - Preferences + onboarding (localStorage)
  * - Premium UI elements locked
  */
 
@@ -226,6 +228,102 @@ function WhyPanel({ open, onClose }) {
   );
 }
 
+function LockedAlertsPanel() {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-900">Alerts (Premium)</div>
+        <span className="text-xs text-slate-400">🔒 Locked</span>
+      </div>
+
+      <p className="mt-2 text-sm text-slate-600">Set rules like “Momentum crosses above X” or “Confidence becomes High.”</p>
+
+      <div className="mt-3 space-y-3 opacity-70">
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-sm text-slate-700">Momentum crosses above</div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">70</div>
+            <div className="text-xs text-slate-400">🔒</div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="text-sm text-slate-700">Confidence becomes</div>
+          <div className="flex items-center gap-2">
+            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">High</div>
+            <div className="text-xs text-slate-400">🔒</div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          disabled
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 cursor-not-allowed"
+        >
+          Save Alerts (Premium)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OnboardingCard({ onClose, onApplyStarter }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-semibold text-slate-900">Welcome</div>
+          <div className="mt-1 text-sm text-slate-700 leading-relaxed max-w-3xl">
+            This dashboard summarizes <b>momentum conditions</b> across digital assets. It’s built for clarity — not hype.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+        >
+          Dismiss
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-900">Momentum ≠ prediction</div>
+          <div className="mt-1 text-sm text-slate-600">
+            Scores help compare recent trend conditions. They do not guarantee future outcomes.
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-900">Use confidence to reduce noise</div>
+          <div className="mt-1 text-sm text-slate-600">
+            “High” confidence typically means cleaner alignment across timeframes.
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-900">Start with a watchlist</div>
+          <div className="mt-1 text-sm text-slate-600">
+            Star assets you care about. Your watchlist saves locally on this device.
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-xs text-slate-500">Preferences are saved locally on this device.</div>
+
+        <button
+          type="button"
+          onClick={onApplyStarter}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+        >
+          Apply beginner-friendly defaults
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Drawer({ open, onClose, coin, breakdown, confidence }) {
   if (!open) return null;
 
@@ -316,18 +414,6 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
             </p>
           </div>
 
-          <div className="rounded-xl border border-slate-200 p-4">
-            <div className="text-sm font-semibold text-slate-900">What would change this</div>
-            <ul className="mt-3 space-y-2">
-              {(breakdown?.whatWouldChange ?? []).slice(0, 4).map((d, idx) => (
-                <li key={idx} className="text-sm text-slate-700 flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  <span>{d}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
           <div className="rounded-xl border border-slate-200 p-4 bg-white">
             <div className="text-sm font-semibold text-slate-900">Reminder</div>
             <p className="mt-2 text-sm text-slate-700 leading-relaxed">
@@ -337,45 +423,6 @@ function Drawer({ open, onClose, coin, breakdown, confidence }) {
         </div>
       </div>
     </>
-  );
-}
-
-function LockedAlertsPanel() {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-slate-900">Alerts (Premium)</div>
-        <span className="text-xs text-slate-400">🔒 Locked</span>
-      </div>
-
-      <p className="mt-2 text-sm text-slate-600">Set rules like “Momentum crosses above X” or “Confidence becomes High.”</p>
-
-      <div className="mt-3 space-y-3 opacity-70">
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-sm text-slate-700">Momentum crosses above</div>
-          <div className="flex items-center gap-2">
-            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">70</div>
-            <div className="text-xs text-slate-400">🔒</div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <div className="text-sm text-slate-700">Confidence becomes</div>
-          <div className="flex items-center gap-2">
-            <div className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-500">High</div>
-            <div className="text-xs text-slate-400">🔒</div>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          disabled
-          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500 cursor-not-allowed"
-        >
-          Save Alerts (Premium)
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -399,8 +446,14 @@ export default function Page() {
   const [watchOnlyHigh, setWatchOnlyHigh] = useState(false);
   const [whyOpen, setWhyOpen] = useState(false);
 
+  // Preferences + onboarding
+  const [prefs, setPrefs] = useState(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [hideTop3, setHideTop3] = useState(false);
+
   const inFlightRef = useRef(false);
 
+  // Load watchlist
   useEffect(() => {
     const ids = loadWatchlist();
     setWatchIds(new Set(ids));
@@ -409,6 +462,45 @@ export default function Page() {
   useEffect(() => {
     saveWatchlist(Array.from(watchIds));
   }, [watchIds]);
+
+  // Load preferences (first mount) and apply
+  useEffect(() => {
+    const p = loadPreferences();
+    setPrefs(p);
+
+    setView(p.defaultView === "watchlist" ? "watchlist" : "all");
+    setWatchOnlyHigh(!!p.watchOnlyHighDefault);
+    setWatchSort(p.watchSortDefault || "score");
+    setHideTop3(!!p.hideTop3);
+
+    setShowOnboarding(!p.onboardingDismissed);
+  }, []);
+
+  // Persist preferences whenever they change (after initial load)
+  useEffect(() => {
+    if (!prefs) return;
+    savePreferences(prefs);
+  }, [prefs]);
+
+  function updatePrefs(patch) {
+    setPrefs((prev) => {
+      const next = { ...(prev || loadPreferences()), ...(patch || {}) };
+      return next;
+    });
+  }
+
+  function doResetPreferences() {
+    resetPreferences();
+    const p = loadPreferences();
+    setPrefs(p);
+
+    setView(p.defaultView);
+    setWatchOnlyHigh(!!p.watchOnlyHighDefault);
+    setWatchSort(p.watchSortDefault);
+    setHideTop3(!!p.hideTop3);
+
+    setShowOnboarding(!p.onboardingDismissed);
+  }
 
   async function load({ showSpinner } = { showSpinner: true }) {
     if (inFlightRef.current) return;
@@ -615,6 +707,26 @@ export default function Page() {
     return sortDir === "asc" ? " ▲" : " ▼";
   };
 
+  function dismissOnboarding() {
+    setShowOnboarding(false);
+    updatePrefs({ onboardingDismissed: true });
+  }
+
+  function applyBeginnerDefaults() {
+    // Calm, novice-friendly: Watchlist view + Only High confidence + Sort by Score + keep Top 3 visible
+    setView("watchlist");
+    setWatchOnlyHigh(true);
+    setWatchSort("score");
+    setHideTop3(false);
+
+    updatePrefs({
+      defaultView: "watchlist",
+      watchOnlyHighDefault: true,
+      watchSortDefault: "score",
+      hideTop3: false,
+    });
+  }
+
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="mx-auto max-w-6xl px-5 py-8">
@@ -654,16 +766,47 @@ export default function Page() {
               </button>
             </div>
 
-            <div className="text-xs text-slate-500">Tip: click any row to open “Why this score?”</div>
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>Tip: click any row to open “Why this score?”</span>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={doResetPreferences}
+                className="text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                title="Reset saved preferences on this device"
+              >
+                Reset preferences
+              </button>
+            </div>
           </div>
         </header>
 
+        {/* Onboarding */}
+        {showOnboarding ? (
+          <section className="mt-6">
+            <OnboardingCard onClose={dismissOnboarding} onApplyStarter={applyBeginnerDefaults} />
+          </section>
+        ) : null}
+
+        {/* Tabs */}
         <section className="mt-6 flex items-center gap-2">
-          <TabButton active={view === "all"} onClick={() => setView("all")}>
+          <TabButton
+            active={view === "all"}
+            onClick={() => {
+              setView("all");
+              updatePrefs({ defaultView: "all" });
+            }}
+          >
             All
           </TabButton>
 
-          <TabButton active={view === "watchlist"} onClick={() => setView("watchlist")}>
+          <TabButton
+            active={view === "watchlist"}
+            onClick={() => {
+              setView("watchlist");
+              updatePrefs({ defaultView: "watchlist" });
+            }}
+          >
             Watchlist{" "}
             <span
               className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
@@ -673,8 +816,20 @@ export default function Page() {
               {watchlistCount}
             </span>
           </TabButton>
+
+          <div className="ml-auto flex items-center gap-2">
+            <Toggle
+              checked={hideTop3}
+              onChange={(v) => {
+                setHideTop3(v);
+                updatePrefs({ hideTop3: v });
+              }}
+              label="Hide Top 3"
+            />
+          </div>
         </section>
 
+        {/* Watchlist premium-feel overview */}
         {view === "watchlist" ? (
           <section className="mt-6">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -685,21 +840,52 @@ export default function Page() {
 
               <div className="flex flex-wrap items-center gap-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-1 flex items-center">
-                  <SegButton active={watchSort === "score"} onClick={() => setWatchSort("score")}>
+                  <SegButton
+                    active={watchSort === "score"}
+                    onClick={() => {
+                      setWatchSort("score");
+                      updatePrefs({ watchSortDefault: "score" });
+                    }}
+                  >
                     Sort: Score
                   </SegButton>
-                  <SegButton active={watchSort === "change24"} onClick={() => setWatchSort("change24")}>
+                  <SegButton
+                    active={watchSort === "change24"}
+                    onClick={() => {
+                      setWatchSort("change24");
+                      updatePrefs({ watchSortDefault: "change24" });
+                    }}
+                  >
                     24h
                   </SegButton>
-                  <SegButton active={watchSort === "change7"} onClick={() => setWatchSort("change7")}>
+                  <SegButton
+                    active={watchSort === "change7"}
+                    onClick={() => {
+                      setWatchSort("change7");
+                      updatePrefs({ watchSortDefault: "change7" });
+                    }}
+                  >
                     7d
                   </SegButton>
-                  <SegButton active={watchSort === "name"} onClick={() => setWatchSort("name")}>
+                  <SegButton
+                    active={watchSort === "name"}
+                    onClick={() => {
+                      setWatchSort("name");
+                      updatePrefs({ watchSortDefault: "name" });
+                    }}
+                  >
                     Name
                   </SegButton>
                 </div>
 
-                <Toggle checked={watchOnlyHigh} onChange={setWatchOnlyHigh} label="Only High confidence" />
+                <Toggle
+                  checked={watchOnlyHigh}
+                  onChange={(v) => {
+                    setWatchOnlyHigh(v);
+                    updatePrefs({ watchOnlyHighDefault: v });
+                  }}
+                  label="Only High confidence"
+                />
               </div>
             </div>
 
@@ -764,43 +950,48 @@ export default function Page() {
           </section>
         ) : null}
 
-        <section className="mt-7">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              Top 3 Momentum Opportunities ({view === "watchlist" ? "Watchlist" : "All"})
-            </h2>
-            <span className="text-xs text-slate-500">Not investment advice</span>
-          </div>
+        {/* Top 3 */}
+        {!hideTop3 ? (
+          <section className="mt-7">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Top 3 Momentum Opportunities ({view === "watchlist" ? "Watchlist" : "All"})
+              </h2>
+              <span className="text-xs text-slate-500">Not investment advice</span>
+            </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {top3.map((c) => {
-              const tone = c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedId(c.id)}
-                  className="text-left rounded-2xl border border-slate-200 p-4 hover:bg-slate-50 transition"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-semibold truncate">
-                      {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {top3.map((c) => {
+                const tone =
+                  c.confidence?.label === "High" ? "good" : c.confidence?.label === "Medium" ? "warn" : "bad";
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedId(c.id)}
+                    className="text-left rounded-2xl border border-slate-200 p-4 hover:bg-slate-50 transition"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold truncate">
+                        {c.name} <span className="text-slate-400 font-medium">({c.symbol?.toUpperCase()})</span>
+                      </div>
+                      <Badge tone={tone}>{c.confidence?.label ?? "—"} confidence</Badge>
                     </div>
-                    <Badge tone={tone}>{c.confidence?.label ?? "—"} confidence</Badge>
-                  </div>
-                  <div className="mt-2 text-sm text-slate-600">
-                    Score: <span className="font-semibold text-slate-900">{c.score}</span>
-                    <span className="mx-2 text-slate-300">•</span>
-                    24h: <span className="font-medium">{formatPct(c.price_change_percentage_24h_in_currency)}</span>
-                    <span className="mx-2 text-slate-300">•</span>
-                    7d: <span className="font-medium">{formatPct(c.price_change_percentage_7d_in_currency)}</span>
-                  </div>
-                  <div className="mt-2 text-xs text-slate-500 line-clamp-2">{c.breakdown?.drivers?.[0] ?? ""}</div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+                    <div className="mt-2 text-sm text-slate-600">
+                      Score: <span className="font-semibold text-slate-900">{c.score}</span>
+                      <span className="mx-2 text-slate-300">•</span>
+                      24h: <span className="font-medium">{formatPct(c.price_change_percentage_24h_in_currency)}</span>
+                      <span className="mx-2 text-slate-300">•</span>
+                      7d: <span className="font-medium">{formatPct(c.price_change_percentage_7d_in_currency)}</span>
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500 line-clamp-2">{c.breakdown?.drivers?.[0] ?? ""}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
 
+        {/* Table */}
         <section className="mt-8">
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <div className="overflow-x-auto">
@@ -936,6 +1127,7 @@ export default function Page() {
           </div>
         </section>
 
+        {/* Premium locked section */}
         <section className="mt-8">
           <div className="rounded-2xl border border-slate-200 p-5 bg-slate-50">
             <div className="flex items-center justify-between">
