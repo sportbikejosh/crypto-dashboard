@@ -13,6 +13,8 @@ import {
   X,
   Link2,
   ArrowUpDown,
+  Columns2,
+  Lock,
 } from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -154,11 +156,31 @@ function StarButton({ active, onClick }) {
   );
 }
 
+// Premium-locked compare button (visual lock, click opens modal)
+function CompareButtonLocked({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="h-9 w-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center hover:bg-slate-100 transition"
+      title="Compare (Premium)"
+      aria-label="Compare (Premium)"
+    >
+      <div className="relative">
+        <Columns2 className="h-4 w-4 text-slate-500" />
+        <Lock className="h-3 w-3 text-slate-500 absolute -right-2 -bottom-2" />
+      </div>
+    </button>
+  );
+}
+
 function SkeletonRow() {
   return (
     <tr className="animate-pulse">
       <td className="px-4 py-4">
-        <div className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200" />
+        <div className="flex items-center gap-2">
+          <div className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200" />
+          <div className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200" />
+        </div>
       </td>
       <td className="px-4 py-4">
         <div className="h-4 bg-slate-100 rounded w-40" />
@@ -205,7 +227,8 @@ function Drawer({ open, onClose, coin }) {
           <div className="min-w-0">
             <div className="text-lg font-semibold text-slate-900 truncate">{coin.name}</div>
             <div className="mt-1 text-sm text-slate-500 truncate">
-              {coin.symbol?.toUpperCase()} • {formatMoney(coin.current_price)} • 24h {formatPct(coin.price_change_percentage_24h_in_currency)}
+              {coin.symbol?.toUpperCase()} • {formatMoney(coin.current_price)} • 24h{" "}
+              {formatPct(coin.price_change_percentage_24h_in_currency)}
             </div>
           </div>
           <button
@@ -257,6 +280,74 @@ function Drawer({ open, onClose, coin }) {
   );
 }
 
+function PremiumModal({ open, onClose }) {
+  if (!open) return null;
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+        <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-slate-900">Premium Feature</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Pinned comparison is available on the paid plan.
+              </div>
+            </div>
+            <button
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center gap-2 text-slate-900 font-semibold">
+                <Columns2 className="h-5 w-5" />
+                Pinned Comparison
+                <Badge>Premium</Badge>
+              </div>
+              <p className="mt-2 text-sm text-slate-700 leading-relaxed">
+                Compare two assets side-by-side with momentum drivers and confidence context — designed for calm decision-support.
+              </p>
+              <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                <li className="flex gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Pin up to two assets to compare
+                </li>
+                <li className="flex gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Side-by-side momentum + confidence explanations
+                </li>
+                <li className="flex gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Shareable comparison links (coming with auth)
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-slate-500">
+                (No checkout/auth yet — this is a visual lock for now.)
+              </div>
+              <button
+                className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                onClick={onClose}
+                title="Placeholder CTA (auth/checkout later)"
+              >
+                View pricing
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function Page() {
   const [coins, setCoins] = useState([]);
   const [status, setStatus] = useState({ loading: true, error: "" });
@@ -284,6 +375,10 @@ export default function Page() {
   // Drawer
   const [selectedId, setSelectedId] = useState(null);
 
+  // Premium lock
+  const [premiumOpen, setPremiumOpen] = useState(false);
+  const [compareTeaserVisible, setCompareTeaserVisible] = useState(false);
+
   // Share feedback
   const [shareStatus, setShareStatus] = useState(""); // "", "copied", "failed"
 
@@ -292,7 +387,7 @@ export default function Page() {
   // Preferences (persist)
   const [prefs, setPrefs] = useState(null);
 
-  // Defaults for "Clear filters" (based on prefs at load time)
+  // Defaults for "Clear filters"
   const defaultsRef = useRef({ onlyHigh: false });
 
   // URL sync
@@ -309,7 +404,6 @@ export default function Page() {
     const p = loadPreferences();
     setPrefs(p);
 
-    // Base defaults from prefs
     const baseMarketLimit = clampNum(p.marketLimit, [50, 100, 250], 250);
     const basePageSize = clampNum(p.pageSize, [25, 50], 25);
     const baseOnlyHigh = !!p.watchOnlyHighDefault;
@@ -320,7 +414,6 @@ export default function Page() {
 
     defaultsRef.current.onlyHigh = baseOnlyHigh;
 
-    // URL overrides (share links)
     let urlView = null;
     let urlQ = null;
     let urlHigh = null;
@@ -370,22 +463,25 @@ export default function Page() {
   // --------- keyboard shortcuts ----------
   useEffect(() => {
     function onKeyDown(e) {
-      // Don’t hijack typing
       const tag = (e.target?.tagName || "").toLowerCase();
       const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
 
-      // "/" focuses search
       if (e.key === "/" && !isTyping) {
         e.preventDefault();
         searchRef.current?.focus?.();
         return;
       }
 
-      // "Escape": close drawer if open, else clear search
       if (e.key === "Escape") {
+        if (premiumOpen) {
+          setPremiumOpen(false);
+          return;
+        }
         if (selectedId) {
           setSelectedId(null);
-        } else if (query) {
+          return;
+        }
+        if (query) {
           setQuery("");
           setPage(1);
         }
@@ -394,7 +490,7 @@ export default function Page() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [query, selectedId]);
+  }, [query, selectedId, premiumOpen]);
 
   // --------- persist watchlist ----------
   useEffect(() => {
@@ -441,7 +537,6 @@ export default function Page() {
     setPage(1);
     setSelectedId(null);
 
-    // Clear URL params
     try {
       const url = new URL(window.location.href);
       url.search = "";
@@ -540,13 +635,10 @@ export default function Page() {
     return out;
   }
 
-  const allSorted = useMemo(() => {
-    return sortArray(globallyFiltered, allSortKey, allSortDir);
-  }, [globallyFiltered, allSortKey, allSortDir]);
+  const allSorted = useMemo(() => sortArray(globallyFiltered, allSortKey, allSortDir), [globallyFiltered, allSortKey, allSortDir]);
 
   const watchlistItems = useMemo(() => {
     const items = globallyFiltered.filter((c) => watchIds.has(c.id));
-    // Watchlist: always desc for numeric keys; asc for name
     const dir = watchSort === "name" ? "asc" : "desc";
     return sortArray(items, watchSort, dir);
   }, [globallyFiltered, watchIds, watchSort]);
@@ -571,10 +663,8 @@ export default function Page() {
     const items = watchlistItems;
     const count = items.length;
     if (!count) return { count: 0, avg: "—", high: 0 };
-
     const avg = Math.round(items.reduce((sum, c) => sum + (c.score ?? 0), 0) / count);
     const high = items.filter((c) => c.confidence?.label === "High").length;
-
     return { count, avg, high };
   }, [watchlistItems]);
 
@@ -594,15 +684,22 @@ export default function Page() {
       updatePrefs({ allSortDir: nextDir });
       return;
     }
+    const nextDir = key === "name" ? "asc" : "desc";
     setAllSortKey(key);
-    setAllSortDir(key === "name" ? "asc" : "desc");
-    updatePrefs({ allSortKey: key, allSortDir: key === "name" ? "asc" : "desc" });
+    setAllSortDir(nextDir);
+    updatePrefs({ allSortKey: key, allSortDir: nextDir });
     setPage(1);
   }
 
   function sortHint(key) {
     if (allSortKey !== key) return "";
     return allSortDir === "asc" ? " ▲" : " ▼";
+  }
+
+  // --------- Premium locked compare handler ----------
+  function handleCompareClick() {
+    setCompareTeaserVisible(true);
+    setPremiumOpen(true);
   }
 
   // --------- URL sync + Share URL builder ----------
@@ -662,7 +759,9 @@ export default function Page() {
             <div className="text-xs text-slate-500 mt-1">
               {fetchedAt ? `Last updated: ${formatTime(fetchedAt)}` : ""}
               <span className="ml-2 text-slate-300">•</span>
-              <span className="ml-2">Shortcuts: <b>/</b> search, <b>Esc</b> close/clear</span>
+              <span className="ml-2">
+                Shortcuts: <b>/</b> search, <b>Esc</b> close/clear
+              </span>
             </div>
           </div>
 
@@ -758,7 +857,6 @@ export default function Page() {
                 </select>
               </div>
 
-              {/* Watchlist sort persists too */}
               <div className="flex items-center gap-2 text-xs text-slate-500">
                 <span>Watch sort</span>
                 <select
@@ -833,6 +931,12 @@ export default function Page() {
             <Chip>
               All sort: {allSortKey} {allSortDir === "asc" ? "↑" : "↓"}
             </Chip>
+
+            {compareTeaserVisible ? (
+              <Chip onRemove={() => setCompareTeaserVisible(false)}>
+                Compare <span className="text-slate-400">(Premium)</span>
+              </Chip>
+            ) : null}
 
             <span className="ml-auto text-xs text-slate-500">
               Showing <b>{rows.length}</b> item(s)
@@ -991,7 +1095,10 @@ export default function Page() {
                       title="Click for explanation"
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <StarButton active={watched} onClick={() => toggleWatch(c.id)} />
+                        <div className="flex items-center gap-2">
+                          <StarButton active={watched} onClick={() => toggleWatch(c.id)} />
+                          <CompareButtonLocked onClick={handleCompareClick} />
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 font-medium">
@@ -1037,14 +1144,60 @@ export default function Page() {
           ) : null}
         </div>
 
-        {/* Tiny helper (premium microcopy) */}
+        {/* Premium microcopy */}
         <div className="mt-4 text-xs text-slate-500 flex items-center gap-2">
           <ArrowUpDown className="h-3.5 w-3.5" />
-          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. Press <b>/</b> to search.
+          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. <b>Compare</b> is a Premium feature.
         </div>
       </div>
 
+      {/* Premium-locked Compare Bar teaser (appears after they try compare) */}
+      {compareTeaserVisible ? (
+        <div className="fixed bottom-4 left-0 right-0 z-30 px-4">
+          <div className="mx-auto max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-lg px-4 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-900 inline-flex items-center gap-2">
+                  <Columns2 className="h-4 w-4 text-slate-700" />
+                  Compare
+                  <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+                    <Lock className="h-3.5 w-3.5" />
+                    Premium
+                  </span>
+                </span>
+
+                <div className="ml-2 text-sm text-slate-600">
+                  Pin 2 assets to compare side-by-side (locked).
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setCompareTeaserVisible(false)}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPremiumOpen(true)}
+                  className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
+                >
+                  Upgrade to unlock
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2 text-xs text-slate-500">
+              Calm decision-support: compare momentum drivers and confidence context. No predictions.
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <Drawer open={!!selectedId} onClose={() => setSelectedId(null)} coin={selectedCoin} />
+      <PremiumModal open={premiumOpen} onClose={() => setPremiumOpen(false)} />
     </main>
   );
 }
