@@ -4,7 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
 import { loadPreferences, resetPreferences, savePreferences } from "../lib/preferences";
-import { Star, RefreshCw, ChevronLeft, ChevronRight, Filter, X, Link2 } from "lucide-react";
+import {
+  Star,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  X,
+  Link2,
+  ArrowUpDown,
+} from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -37,7 +46,6 @@ function clampPage(value, fallback = 1) {
 }
 
 function toBool(value) {
-  // Accept: "1", "true", "yes", "on"
   if (value == null) return null;
   const v = String(value).toLowerCase().trim();
   if (["1", "true", "yes", "on"].includes(v)) return true;
@@ -51,10 +59,7 @@ async function copyToClipboard(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch {
-    // fall back
-  }
-
+  } catch {}
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -68,6 +73,15 @@ async function copyToClipboard(text) {
     return ok;
   } catch {
     return false;
+  }
+}
+
+function formatTime(ts) {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return "";
   }
 }
 
@@ -176,6 +190,73 @@ function StatCard({ title, value, sub }) {
   );
 }
 
+function Drawer({ open, onClose, coin }) {
+  if (!open || !coin) return null;
+
+  const label = coin.confidence?.label ?? "—";
+  const tone = label === "High" ? "good" : label === "Medium" ? "warn" : "bad";
+  const drivers = coin.breakdown?.drivers || [];
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div className="fixed right-0 top-0 z-50 h-full w-full max-w-lg bg-white shadow-2xl border-l border-slate-200">
+        <div className="flex items-start justify-between p-5 border-b border-slate-200">
+          <div className="min-w-0">
+            <div className="text-lg font-semibold text-slate-900 truncate">{coin.name}</div>
+            <div className="mt-1 text-sm text-slate-500 truncate">
+              {coin.symbol?.toUpperCase()} • {formatMoney(coin.current_price)} • 24h {formatPct(coin.price_change_percentage_24h_in_currency)}
+            </div>
+          </div>
+          <button
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto h-[calc(100%-76px)]">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-900">Momentum Score</div>
+              <div className="text-2xl font-semibold text-slate-900">{coin.score}</div>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <Badge tone={tone}>Confidence: {label}</Badge>
+              <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
+            </div>
+            <p className="mt-3 text-sm text-slate-700 leading-relaxed">{coin.confidence?.explanation || ""}</p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm font-semibold text-slate-900">What’s driving this score</div>
+            {drivers.length ? (
+              <ul className="mt-3 space-y-2">
+                {drivers.slice(0, 8).map((d, idx) => (
+                  <li key={idx} className="text-sm text-slate-700 flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                    <span>{d}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-3 text-sm text-slate-600">No breakdown available.</div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm font-semibold text-slate-900">Notes</div>
+            <div className="mt-2 text-sm text-slate-600 leading-relaxed">
+              Use momentum for ranking and timing context — not as a price prediction.
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function Page() {
   const [coins, setCoins] = useState([]);
   const [status, setStatus] = useState({ loading: true, error: "" });
@@ -195,6 +276,14 @@ export default function Page() {
   // Global filter
   const [onlyHigh, setOnlyHigh] = useState(false);
 
+  // Sorting
+  const [allSortKey, setAllSortKey] = useState("score"); // score | change24 | name | price
+  const [allSortDir, setAllSortDir] = useState("desc"); // asc | desc
+  const [watchSort, setWatchSort] = useState("score"); // score | change24 | name | price
+
+  // Drawer
+  const [selectedId, setSelectedId] = useState(null);
+
   // Share feedback
   const [shareStatus, setShareStatus] = useState(""); // "", "copied", "failed"
 
@@ -210,6 +299,9 @@ export default function Page() {
   const hydratedRef = useRef(false);
   const lastUrlRef = useRef("");
 
+  // Refs for keyboard shortcuts
+  const searchRef = useRef(null);
+
   // --------- initial load: watchlist + prefs + URL override ----------
   useEffect(() => {
     setWatchIds(new Set(loadWatchlist()));
@@ -222,6 +314,10 @@ export default function Page() {
     const basePageSize = clampNum(p.pageSize, [25, 50], 25);
     const baseOnlyHigh = !!p.watchOnlyHighDefault;
 
+    const baseAllSortKey = clampEnum(p.allSortKey, ["score", "change24", "name", "price"], "score");
+    const baseAllSortDir = clampEnum(p.allSortDir, ["asc", "desc"], "desc");
+    const baseWatchSort = clampEnum(p.watchSortDefault, ["score", "change24", "name", "price"], "score");
+
     defaultsRef.current.onlyHigh = baseOnlyHigh;
 
     // URL overrides (share links)
@@ -232,6 +328,11 @@ export default function Page() {
     let urlSize = null;
     let urlPage = null;
 
+    let urlSort = null;
+    let urlDir = null;
+    let urlWsort = null;
+    let urlSel = null;
+
     try {
       const sp = new URLSearchParams(window.location.search);
       urlView = sp.get("view");
@@ -240,27 +341,60 @@ export default function Page() {
       urlLimit = sp.get("limit");
       urlSize = sp.get("size");
       urlPage = sp.get("page");
-    } catch {
-      // ignore
-    }
+
+      urlSort = sp.get("sort");
+      urlDir = sp.get("dir");
+      urlWsort = sp.get("wsort");
+      urlSel = sp.get("sel");
+    } catch {}
 
     setView(clampEnum(urlView, ["all", "watchlist"], "all"));
-
     setQuery(typeof urlQ === "string" ? urlQ : "");
 
     const nextOnlyHigh = urlHigh === null ? baseOnlyHigh : urlHigh;
     setOnlyHigh(nextOnlyHigh);
 
-    const nextLimit = clampNum(urlLimit, [50, 100, 250], baseMarketLimit);
-    setMarketLimit(nextLimit);
-
-    const nextSize = clampNum(urlSize, [25, 50], basePageSize);
-    setPageSize(nextSize);
-
+    setMarketLimit(clampNum(urlLimit, [50, 100, 250], baseMarketLimit));
+    setPageSize(clampNum(urlSize, [25, 50], basePageSize));
     setPage(clampPage(urlPage, 1));
+
+    setAllSortKey(clampEnum(urlSort, ["score", "change24", "name", "price"], baseAllSortKey));
+    setAllSortDir(clampEnum(urlDir, ["asc", "desc"], baseAllSortDir));
+    setWatchSort(clampEnum(urlWsort, ["score", "change24", "name", "price"], baseWatchSort));
+
+    setSelectedId(urlSel ? String(urlSel) : null);
 
     hydratedRef.current = true;
   }, []);
+
+  // --------- keyboard shortcuts ----------
+  useEffect(() => {
+    function onKeyDown(e) {
+      // Don’t hijack typing
+      const tag = (e.target?.tagName || "").toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+
+      // "/" focuses search
+      if (e.key === "/" && !isTyping) {
+        e.preventDefault();
+        searchRef.current?.focus?.();
+        return;
+      }
+
+      // "Escape": close drawer if open, else clear search
+      if (e.key === "Escape") {
+        if (selectedId) {
+          setSelectedId(null);
+        } else if (query) {
+          setQuery("");
+          setPage(1);
+        }
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [query, selectedId]);
 
   // --------- persist watchlist ----------
   useEffect(() => {
@@ -289,24 +423,31 @@ export default function Page() {
     const basePageSize = clampNum(p.pageSize, [25, 50], 25);
     const baseOnlyHigh = !!p.watchOnlyHighDefault;
 
+    const baseAllSortKey = clampEnum(p.allSortKey, ["score", "change24", "name", "price"], "score");
+    const baseAllSortDir = clampEnum(p.allSortDir, ["asc", "desc"], "desc");
+    const baseWatchSort = clampEnum(p.watchSortDefault, ["score", "change24", "name", "price"], "score");
+
     setMarketLimit(baseMarketLimit);
     setPageSize(basePageSize);
 
     setOnlyHigh(baseOnlyHigh);
     defaultsRef.current.onlyHigh = baseOnlyHigh;
 
+    setAllSortKey(baseAllSortKey);
+    setAllSortDir(baseAllSortDir);
+    setWatchSort(baseWatchSort);
+
     setQuery("");
     setPage(1);
+    setSelectedId(null);
 
-    // Also clear URL params to match a clean “fresh” state
+    // Clear URL params
     try {
       const url = new URL(window.location.href);
       url.search = "";
       window.history.replaceState({}, "", url.toString());
       lastUrlRef.current = url.toString();
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   function clearFilters() {
@@ -369,21 +510,58 @@ export default function Page() {
     return searched.filter((c) => c.confidence?.label === "High");
   }, [searched, onlyHigh]);
 
+  // Sorting helper
+  function sortArray(arr, key, dir) {
+    const mult = dir === "asc" ? 1 : -1;
+
+    const get = (c) => {
+      switch (key) {
+        case "name":
+          return String(c.name || "");
+        case "price":
+          return Number(c.current_price ?? 0);
+        case "change24":
+          return Number(c.price_change_percentage_24h_in_currency ?? 0);
+        case "score":
+        default:
+          return Number(c.score ?? 0);
+      }
+    };
+
+    const out = [...arr];
+    out.sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      if (typeof va === "string" || typeof vb === "string") {
+        return String(va).localeCompare(String(vb)) * mult;
+      }
+      return (va - vb) * mult;
+    });
+    return out;
+  }
+
+  const allSorted = useMemo(() => {
+    return sortArray(globallyFiltered, allSortKey, allSortDir);
+  }, [globallyFiltered, allSortKey, allSortDir]);
+
   const watchlistItems = useMemo(() => {
-    return globallyFiltered.filter((c) => watchIds.has(c.id));
-  }, [globallyFiltered, watchIds]);
+    const items = globallyFiltered.filter((c) => watchIds.has(c.id));
+    // Watchlist: always desc for numeric keys; asc for name
+    const dir = watchSort === "name" ? "asc" : "desc";
+    return sortArray(items, watchSort, dir);
+  }, [globallyFiltered, watchIds, watchSort]);
 
   const paginatedAll = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return globallyFiltered.slice(start, start + pageSize);
-  }, [globallyFiltered, page, pageSize]);
+    return allSorted.slice(start, start + pageSize);
+  }, [allSorted, page, pageSize]);
 
   const rows = view === "watchlist" ? watchlistItems : paginatedAll;
 
   const totalPages = useMemo(() => {
     if (view !== "all") return 1;
-    return Math.max(1, Math.ceil(globallyFiltered.length / pageSize));
-  }, [globallyFiltered.length, pageSize, view]);
+    return Math.max(1, Math.ceil(allSorted.length / pageSize));
+  }, [allSorted.length, pageSize, view]);
 
   useEffect(() => {
     if (view === "all" && page > totalPages) setPage(1);
@@ -408,6 +586,25 @@ export default function Page() {
     });
   }
 
+  // --------- sorting UI handlers ----------
+  function toggleAllSort(key) {
+    if (allSortKey === key) {
+      const nextDir = allSortDir === "asc" ? "desc" : "asc";
+      setAllSortDir(nextDir);
+      updatePrefs({ allSortDir: nextDir });
+      return;
+    }
+    setAllSortKey(key);
+    setAllSortDir(key === "name" ? "asc" : "desc");
+    updatePrefs({ allSortKey: key, allSortDir: key === "name" ? "asc" : "desc" });
+    setPage(1);
+  }
+
+  function sortHint(key) {
+    if (allSortKey !== key) return "";
+    return allSortDir === "asc" ? " ▲" : " ▼";
+  }
+
   // --------- URL sync + Share URL builder ----------
   const shareUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -421,11 +618,16 @@ export default function Page() {
     sp.set("size", String(pageSize));
     sp.set("page", String(page));
 
+    sp.set("sort", allSortKey);
+    sp.set("dir", allSortDir);
+    sp.set("wsort", watchSort);
+
+    if (selectedId) sp.set("sel", String(selectedId));
+
     url.search = sp.toString();
     return url.toString();
-  }, [view, query, onlyHigh, marketLimit, pageSize, page]);
+  }, [view, query, onlyHigh, marketLimit, pageSize, page, allSortKey, allSortDir, watchSort, selectedId]);
 
-  // Keep the browser URL in sync (no reload) so the address bar is share-ready
   useEffect(() => {
     if (!hydratedRef.current) return;
     try {
@@ -433,9 +635,7 @@ export default function Page() {
         window.history.replaceState({}, "", shareUrl);
         lastUrlRef.current = shareUrl;
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [shareUrl]);
 
   async function handleShare() {
@@ -447,6 +647,11 @@ export default function Page() {
 
   const hasActiveFilters = query.trim().length > 0 || onlyHigh !== defaultsRef.current.onlyHigh;
 
+  const selectedCoin = useMemo(() => {
+    if (!selectedId) return null;
+    return enriched.find((c) => c.id === selectedId) || null;
+  }, [selectedId, enriched]);
+
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="max-w-6xl mx-auto px-5 py-8">
@@ -455,13 +660,16 @@ export default function Page() {
           <div>
             <h1 className="text-2xl font-semibold">Crypto Momentum Dashboard</h1>
             <div className="text-xs text-slate-500 mt-1">
-              {fetchedAt ? `Last updated: ${new Date(fetchedAt).toLocaleString()}` : ""}
+              {fetchedAt ? `Last updated: ${formatTime(fetchedAt)}` : ""}
+              <span className="ml-2 text-slate-300">•</span>
+              <span className="ml-2">Shortcuts: <b>/</b> search, <b>Esc</b> close/clear</span>
             </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:items-end">
             <div className="flex flex-wrap gap-2 items-center justify-end">
               <input
+                ref={searchRef}
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                 placeholder="Search..."
                 value={query}
@@ -483,7 +691,7 @@ export default function Page() {
               <button
                 onClick={handleShare}
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Copy a shareable link with your current filters"
+                title="Copy a shareable link with your current state"
               >
                 <Link2 className="h-4 w-4" />
                 Share link
@@ -498,7 +706,6 @@ export default function Page() {
               </button>
             </div>
 
-            {/* Share micro-feedback */}
             {shareStatus ? (
               <div className={`text-xs ${shareStatus === "copied" ? "text-emerald-700" : "text-rose-700"}`}>
                 {shareStatus === "copied" ? "Link copied to clipboard." : "Couldn’t copy automatically — try again."}
@@ -548,6 +755,25 @@ export default function Page() {
                 >
                   <option value={25}>25</option>
                   <option value={50}>50</option>
+                </select>
+              </div>
+
+              {/* Watchlist sort persists too */}
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span>Watch sort</span>
+                <select
+                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
+                  value={watchSort}
+                  onChange={(e) => {
+                    const v = clampEnum(e.target.value, ["score", "change24", "name", "price"], "score");
+                    setWatchSort(v);
+                    updatePrefs({ watchSortDefault: v });
+                  }}
+                >
+                  <option value="score">Score</option>
+                  <option value="change24">24h</option>
+                  <option value="price">Price</option>
+                  <option value="name">Name</option>
                 </select>
               </div>
             </div>
@@ -604,13 +830,16 @@ export default function Page() {
 
             <Chip>Limit: {marketLimit}</Chip>
             <Chip>Page size: {pageSize}</Chip>
+            <Chip>
+              All sort: {allSortKey} {allSortDir === "asc" ? "↑" : "↓"}
+            </Chip>
 
             <span className="ml-auto text-xs text-slate-500">
               Showing <b>{rows.length}</b> item(s)
               {view === "all" ? (
                 <>
                   {" "}
-                  of <b>{globallyFiltered.length}</b>
+                  of <b>{allSorted.length}</b>
                 </>
               ) : null}
             </span>
@@ -660,10 +889,59 @@ export default function Page() {
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 <th className="px-4 py-3 text-left">Watch</th>
-                <th className="px-4 py-3 text-left">Asset</th>
-                <th className="px-4 py-3 text-right">Price</th>
-                <th className="px-4 py-3 text-right">24h</th>
-                <th className="px-4 py-3 text-right">Momentum</th>
+
+                <th className="px-4 py-3 text-left">
+                  <button
+                    className={`inline-flex items-center gap-2 hover:text-slate-900 ${view === "watchlist" ? "cursor-default" : ""}`}
+                    onClick={() => {
+                      if (view === "all") toggleAllSort("name");
+                    }}
+                    title={view === "all" ? "Sort by name" : "Watchlist sorting is controlled above"}
+                  >
+                    Asset
+                    {view === "all" ? <span className="text-xs text-slate-500">{sortHint("name")}</span> : null}
+                  </button>
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  <button
+                    className={`inline-flex items-center gap-2 hover:text-slate-900 ${view === "watchlist" ? "cursor-default" : ""}`}
+                    onClick={() => {
+                      if (view === "all") toggleAllSort("price");
+                    }}
+                    title={view === "all" ? "Sort by price" : "Watchlist sorting is controlled above"}
+                  >
+                    Price
+                    {view === "all" ? <span className="text-xs text-slate-500">{sortHint("price")}</span> : null}
+                  </button>
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  <button
+                    className={`inline-flex items-center gap-2 hover:text-slate-900 ${view === "watchlist" ? "cursor-default" : ""}`}
+                    onClick={() => {
+                      if (view === "all") toggleAllSort("change24");
+                    }}
+                    title={view === "all" ? "Sort by 24h change" : "Watchlist sorting is controlled above"}
+                  >
+                    24h
+                    {view === "all" ? <span className="text-xs text-slate-500">{sortHint("change24")}</span> : null}
+                  </button>
+                </th>
+
+                <th className="px-4 py-3 text-right">
+                  <button
+                    className={`inline-flex items-center gap-2 hover:text-slate-900 ${view === "watchlist" ? "cursor-default" : ""}`}
+                    onClick={() => {
+                      if (view === "all") toggleAllSort("score");
+                    }}
+                    title={view === "all" ? "Sort by momentum score" : "Watchlist sorting is controlled above"}
+                  >
+                    Momentum
+                    {view === "all" ? <span className="text-xs text-slate-500">{sortHint("score")}</span> : null}
+                  </button>
+                </th>
+
                 <th className="px-4 py-3 text-left">Confidence</th>
               </tr>
             </thead>
@@ -703,15 +981,23 @@ export default function Page() {
                 rows.map((c) => {
                   const label = c.confidence?.label ?? "—";
                   const tone = label === "High" ? "good" : label === "Medium" ? "warn" : "bad";
+                  const watched = watchIds.has(c.id);
 
                   return (
-                    <tr key={c.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <StarButton active={watchIds.has(c.id)} onClick={() => toggleWatch(c.id)} />
+                    <tr
+                      key={c.id}
+                      className="hover:bg-slate-50 cursor-pointer"
+                      onClick={() => setSelectedId(c.id)}
+                      title="Click for explanation"
+                    >
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <StarButton active={watched} onClick={() => toggleWatch(c.id)} />
                       </td>
+
                       <td className="px-4 py-3 font-medium">
-                        {c.name} ({c.symbol.toUpperCase()})
+                        {c.name} <span className="text-slate-400 font-medium">({c.symbol.toUpperCase()})</span>
                       </td>
+
                       <td className="px-4 py-3 text-right">{formatMoney(c.current_price)}</td>
                       <td className="px-4 py-3 text-right">{formatPct(c.price_change_percentage_24h_in_currency)}</td>
                       <td className="px-4 py-3 text-right font-semibold">{c.score}</td>
@@ -750,7 +1036,15 @@ export default function Page() {
             </div>
           ) : null}
         </div>
+
+        {/* Tiny helper (premium microcopy) */}
+        <div className="mt-4 text-xs text-slate-500 flex items-center gap-2">
+          <ArrowUpDown className="h-3.5 w-3.5" />
+          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. Press <b>/</b> to search.
+        </div>
       </div>
+
+      <Drawer open={!!selectedId} onClose={() => setSelectedId(null)} coin={selectedCoin} />
     </main>
   );
 }
