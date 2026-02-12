@@ -15,6 +15,7 @@ import {
   ArrowUpDown,
   Columns2,
   Lock,
+  Bookmark,
 } from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -280,8 +281,29 @@ function Drawer({ open, onClose, coin }) {
   );
 }
 
-function PremiumModal({ open, onClose }) {
+function PremiumModal({ open, onClose, feature = "Premium Feature" }) {
   if (!open) return null;
+
+  const copy =
+    feature === "Saved Views"
+      ? {
+          title: "Saved Views",
+          desc: "Save and recall your preferred dashboard configurations (filters + sorting) in one click.",
+          bullets: [
+            "One-click presets (High Conviction, Balanced, Watchlist Focus)",
+            "Custom saved views (coming with auth)",
+            "Shareable view links (pairs with your Share link)",
+          ],
+        }
+      : {
+          title: "Pinned Comparison",
+          desc: "Compare two assets side-by-side with momentum drivers and confidence context.",
+          bullets: [
+            "Pin up to two assets to compare",
+            "Side-by-side momentum + confidence explanations",
+            "Shareable comparison links (coming with auth)",
+          ],
+        };
 
   return (
     <>
@@ -291,9 +313,7 @@ function PremiumModal({ open, onClose }) {
           <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
             <div>
               <div className="text-lg font-semibold text-slate-900">Premium Feature</div>
-              <div className="mt-1 text-sm text-slate-600">
-                Pinned comparison is available on the paid plan.
-              </div>
+              <div className="mt-1 text-sm text-slate-600">{copy.title} is available on the paid plan.</div>
             </div>
             <button
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
@@ -306,33 +326,23 @@ function PremiumModal({ open, onClose }) {
           <div className="p-5 space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center gap-2 text-slate-900 font-semibold">
-                <Columns2 className="h-5 w-5" />
-                Pinned Comparison
+                {feature === "Saved Views" ? <Bookmark className="h-5 w-5" /> : <Columns2 className="h-5 w-5" />}
+                {copy.title}
                 <Badge>Premium</Badge>
               </div>
-              <p className="mt-2 text-sm text-slate-700 leading-relaxed">
-                Compare two assets side-by-side with momentum drivers and confidence context — designed for calm decision-support.
-              </p>
+              <p className="mt-2 text-sm text-slate-700 leading-relaxed">{copy.desc}</p>
               <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Pin up to two assets to compare
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Side-by-side momentum + confidence explanations
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Shareable comparison links (coming with auth)
-                </li>
+                {copy.bullets.map((b, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                    <span>{b}</span>
+                  </li>
+                ))}
               </ul>
             </div>
 
             <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-slate-500">
-                (No checkout/auth yet — this is a visual lock for now.)
-              </div>
+              <div className="text-xs text-slate-500">(No checkout/auth yet — visual lock only for now.)</div>
               <button
                 className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
                 onClick={onClose}
@@ -340,6 +350,95 @@ function PremiumModal({ open, onClose }) {
               >
                 View pricing
               </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SavedViewsModal({ open, onClose, onSelectLocked }) {
+  if (!open) return null;
+
+  const presets = [
+    {
+      name: "High Conviction",
+      desc: "Only High confidence • Sort by Score (desc) • Top 100",
+      tags: ["High only", "Score ↓", "Top 100"],
+    },
+    {
+      name: "Balanced",
+      desc: "All confidence • Sort by Score (desc) • Top 250",
+      tags: ["All", "Score ↓", "Top 250"],
+    },
+    {
+      name: "Watchlist Focus",
+      desc: "Watchlist view • Sort by Score • Quick review",
+      tags: ["Watchlist", "Score ↓"],
+    },
+  ];
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <Bookmark className="h-5 w-5" />
+                Saved Views
+                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+                  <Lock className="h-3.5 w-3.5" />
+                  Premium
+                </span>
+              </div>
+              <div className="mt-1 text-sm text-slate-600">One-click presets (locked for now).</div>
+            </div>
+            <button
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+            {presets.map((p) => (
+              <button
+                key={p.name}
+                onClick={() => onSelectLocked(p)}
+                className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition"
+                title="Premium locked"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">{p.name}</div>
+                  <Lock className="h-4 w-4 text-slate-500" />
+                </div>
+                <div className="mt-2 text-sm text-slate-600">{p.desc}</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {p.tags.map((t) => (
+                    <span
+                      key={t}
+                      className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="px-5 pb-5">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Why Saved Views?</div>
+              <div className="mt-1 text-sm text-slate-700 leading-relaxed">
+                Most users revisit the same filtering/sorting workflow. Saved Views lets you get back to your “best lens”
+                instantly — without fiddling with controls every time.
+              </div>
+              <div className="mt-2 text-xs text-slate-500">Momentum ≠ prediction. This is organization + decision-support.</div>
             </div>
           </div>
         </div>
@@ -375,9 +474,14 @@ export default function Page() {
   // Drawer
   const [selectedId, setSelectedId] = useState(null);
 
-  // Premium lock
+  // Premium lock states
   const [premiumOpen, setPremiumOpen] = useState(false);
+  const [premiumFeature, setPremiumFeature] = useState("Pinned Comparison");
   const [compareTeaserVisible, setCompareTeaserVisible] = useState(false);
+
+  // Saved Views premium UI
+  const [savedViewsOpen, setSavedViewsOpen] = useState(false);
+  const [savedViewsTeaserVisible, setSavedViewsTeaserVisible] = useState(false);
 
   // Share feedback
   const [shareStatus, setShareStatus] = useState(""); // "", "copied", "failed"
@@ -473,6 +577,10 @@ export default function Page() {
       }
 
       if (e.key === "Escape") {
+        if (savedViewsOpen) {
+          setSavedViewsOpen(false);
+          return;
+        }
         if (premiumOpen) {
           setPremiumOpen(false);
           return;
@@ -490,7 +598,7 @@ export default function Page() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [query, selectedId, premiumOpen]);
+  }, [query, selectedId, premiumOpen, savedViewsOpen]);
 
   // --------- persist watchlist ----------
   useEffect(() => {
@@ -536,6 +644,9 @@ export default function Page() {
     setQuery("");
     setPage(1);
     setSelectedId(null);
+
+    setCompareTeaserVisible(false);
+    setSavedViewsTeaserVisible(false);
 
     try {
       const url = new URL(window.location.href);
@@ -635,7 +746,10 @@ export default function Page() {
     return out;
   }
 
-  const allSorted = useMemo(() => sortArray(globallyFiltered, allSortKey, allSortDir), [globallyFiltered, allSortKey, allSortDir]);
+  const allSorted = useMemo(
+    () => sortArray(globallyFiltered, allSortKey, allSortDir),
+    [globallyFiltered, allSortKey, allSortDir]
+  );
 
   const watchlistItems = useMemo(() => {
     const items = globallyFiltered.filter((c) => watchIds.has(c.id));
@@ -696,10 +810,26 @@ export default function Page() {
     return allSortDir === "asc" ? " ▲" : " ▼";
   }
 
-  // --------- Premium locked compare handler ----------
+  // --------- Premium locked handlers ----------
+  function openPremium(featureName) {
+    setPremiumFeature(featureName);
+    setPremiumOpen(true);
+  }
+
   function handleCompareClick() {
     setCompareTeaserVisible(true);
-    setPremiumOpen(true);
+    openPremium("Pinned Comparison");
+  }
+
+  function handleSavedViewsClick() {
+    setSavedViewsTeaserVisible(true);
+    setSavedViewsOpen(true);
+  }
+
+  function handleSelectSavedViewLocked() {
+    setSavedViewsTeaserVisible(true);
+    setSavedViewsOpen(false);
+    openPremium("Saved Views");
   }
 
   // --------- URL sync + Share URL builder ----------
@@ -785,6 +915,19 @@ export default function Page() {
               >
                 <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
                 Refresh
+              </button>
+
+              <button
+                onClick={handleSavedViewsClick}
+                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
+                title="Saved Views (Premium)"
+              >
+                <Bookmark className="h-4 w-4" />
+                Saved views
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
+                  <Lock className="h-3.5 w-3.5" />
+                  Premium
+                </span>
               </button>
 
               <button
@@ -935,6 +1078,12 @@ export default function Page() {
             {compareTeaserVisible ? (
               <Chip onRemove={() => setCompareTeaserVisible(false)}>
                 Compare <span className="text-slate-400">(Premium)</span>
+              </Chip>
+            ) : null}
+
+            {savedViewsTeaserVisible ? (
+              <Chip onRemove={() => setSavedViewsTeaserVisible(false)}>
+                Saved Views <span className="text-slate-400">(Premium)</span>
               </Chip>
             ) : null}
 
@@ -1147,11 +1296,11 @@ export default function Page() {
         {/* Premium microcopy */}
         <div className="mt-4 text-xs text-slate-500 flex items-center gap-2">
           <ArrowUpDown className="h-3.5 w-3.5" />
-          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. <b>Compare</b> is a Premium feature.
+          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. Premium: <b>Compare</b> + <b>Saved Views</b>.
         </div>
       </div>
 
-      {/* Premium-locked Compare Bar teaser (appears after they try compare) */}
+      {/* Premium Compare teaser bar */}
       {compareTeaserVisible ? (
         <div className="fixed bottom-4 left-0 right-0 z-30 px-4">
           <div className="mx-auto max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-lg px-4 py-3">
@@ -1166,9 +1315,7 @@ export default function Page() {
                   </span>
                 </span>
 
-                <div className="ml-2 text-sm text-slate-600">
-                  Pin 2 assets to compare side-by-side (locked).
-                </div>
+                <div className="ml-2 text-sm text-slate-600">Pin 2 assets to compare side-by-side (locked).</div>
               </div>
 
               <div className="flex items-center gap-2 justify-end">
@@ -1181,14 +1328,13 @@ export default function Page() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPremiumOpen(true)}
+                  onClick={() => openPremium("Pinned Comparison")}
                   className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
                 >
                   Upgrade to unlock
                 </button>
               </div>
             </div>
-
             <div className="mt-2 text-xs text-slate-500">
               Calm decision-support: compare momentum drivers and confidence context. No predictions.
             </div>
@@ -1197,7 +1343,14 @@ export default function Page() {
       ) : null}
 
       <Drawer open={!!selectedId} onClose={() => setSelectedId(null)} coin={selectedCoin} />
-      <PremiumModal open={premiumOpen} onClose={() => setPremiumOpen(false)} />
+
+      <SavedViewsModal
+        open={savedViewsOpen}
+        onClose={() => setSavedViewsOpen(false)}
+        onSelectLocked={handleSelectSavedViewLocked}
+      />
+
+      <PremiumModal open={premiumOpen} onClose={() => setPremiumOpen(false)} feature={premiumFeature} />
     </main>
   );
 }
