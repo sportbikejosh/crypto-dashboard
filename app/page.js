@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
 import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
 import { loadPreferences, resetPreferences, savePreferences } from "../lib/preferences";
-import { Star, RefreshCw, ChevronLeft, ChevronRight, Filter } from "lucide-react";
+import { Star, RefreshCw, ChevronLeft, ChevronRight, Filter, X } from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -30,6 +30,25 @@ function Badge({ children, tone = "neutral" }) {
   return (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${map[tone]}`}>
       {children}
+    </span>
+  );
+}
+
+function Chip({ children, onRemove }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700">
+      {children}
+      {onRemove ? (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-slate-100"
+          aria-label="Remove filter"
+          title="Remove filter"
+        >
+          <X className="h-3.5 w-3.5 text-slate-500" />
+        </button>
+      ) : null}
     </span>
   );
 }
@@ -62,6 +81,7 @@ function StarButton({ active, onClick }) {
         active ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200 hover:bg-slate-50"
       }`}
       title={active ? "Remove from watchlist" : "Add to watchlist"}
+      aria-label={active ? "Remove from watchlist" : "Add to watchlist"}
     >
       <Star className={`h-4 w-4 ${active ? "text-amber-700" : "text-slate-400"}`} fill={active ? "currentColor" : "none"} />
     </button>
@@ -120,13 +140,16 @@ export default function Page() {
   const [fetchedAt, setFetchedAt] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // NEW: global filter
+  // Global filter
   const [onlyHigh, setOnlyHigh] = useState(false);
 
   const inFlight = useRef(false);
 
-  // Preferences object (persist changes)
+  // Preferences (persist)
   const [prefs, setPrefs] = useState(null);
+
+  // Keep original defaults so "Clear filters" can reset cleanly
+  const defaultsRef = useRef({ onlyHigh: false });
 
   useEffect(() => {
     setWatchIds(new Set(loadWatchlist()));
@@ -137,8 +160,9 @@ export default function Page() {
     setMarketLimit(p.marketLimit);
     setPageSize(p.pageSize);
 
-    // Use existing pref key you already have
-    setOnlyHigh(!!p.watchOnlyHighDefault);
+    const initialOnlyHigh = !!p.watchOnlyHighDefault;
+    setOnlyHigh(initialOnlyHigh);
+    defaultsRef.current.onlyHigh = initialOnlyHigh;
   }, []);
 
   useEffect(() => {
@@ -164,8 +188,18 @@ export default function Page() {
 
     setMarketLimit(p.marketLimit);
     setPageSize(p.pageSize);
-    setOnlyHigh(!!p.watchOnlyHighDefault);
 
+    const initialOnlyHigh = !!p.watchOnlyHighDefault;
+    setOnlyHigh(initialOnlyHigh);
+    defaultsRef.current.onlyHigh = initialOnlyHigh;
+
+    setQuery("");
+    setPage(1);
+  }
+
+  function clearFilters() {
+    setQuery("");
+    setOnlyHigh(defaultsRef.current.onlyHigh);
     setPage(1);
   }
 
@@ -216,7 +250,6 @@ export default function Page() {
     return enriched.filter((c) => c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q));
   }, [enriched, query]);
 
-  // Apply global confidence filter
   const globallyFiltered = useMemo(() => {
     if (!onlyHigh) return searched;
     return searched.filter((c) => c.confidence?.label === "High");
@@ -245,7 +278,6 @@ export default function Page() {
   const watchSummary = useMemo(() => {
     const items = watchlistItems;
     const count = items.length;
-
     if (!count) return { count: 0, avg: "—", high: 0 };
 
     const avg = Math.round(items.reduce((sum, c) => sum + (c.score ?? 0), 0) / count);
@@ -262,6 +294,8 @@ export default function Page() {
     });
   }
 
+  const hasActiveFilters = query.trim().length > 0 || onlyHigh !== defaultsRef.current.onlyHigh;
+
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="max-w-6xl mx-auto px-5 py-8">
@@ -271,12 +305,6 @@ export default function Page() {
             <h1 className="text-2xl font-semibold">Crypto Momentum Dashboard</h1>
             <div className="text-xs text-slate-500 mt-1">
               {fetchedAt ? `Last updated: ${new Date(fetchedAt).toLocaleString()}` : ""}
-              {onlyHigh ? (
-                <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-                  <Filter className="h-3.5 w-3.5" />
-                  Only High
-                </span>
-              ) : null}
             </div>
           </div>
 
@@ -305,7 +333,7 @@ export default function Page() {
                 className="text-xs text-slate-600 hover:text-slate-900 underline underline-offset-2"
                 title="Reset saved preferences on this device"
               >
-                Reset
+                Reset preferences
               </button>
             </div>
 
@@ -355,6 +383,71 @@ export default function Page() {
                 </select>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Filter Bar */}
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-sm text-slate-700">
+              <Filter className="h-4 w-4 text-slate-500" />
+              <span className="font-medium">Filters</span>
+              <span className="text-xs text-slate-500">
+                {view === "watchlist" ? "Watchlist view" : "All assets view"}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {hasActiveFilters ? (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                >
+                  Clear filters
+                </button>
+              ) : (
+                <span className="text-xs text-slate-500">No active filters</span>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {query.trim() ? (
+              <Chip
+                onRemove={() => {
+                  setQuery("");
+                  setPage(1);
+                }}
+              >
+                Search: <span className="font-medium">{query.trim()}</span>
+              </Chip>
+            ) : null}
+
+            {onlyHigh ? (
+              <Chip
+                onRemove={() => {
+                  setOnlyHigh(false);
+                  setPage(1);
+                  updatePrefs({ watchOnlyHighDefault: false });
+                }}
+              >
+                Only High confidence
+              </Chip>
+            ) : null}
+
+            <Chip>Limit: {marketLimit}</Chip>
+            <Chip>Page size: {pageSize}</Chip>
+
+            <span className="ml-auto text-xs text-slate-500">
+              Showing <b>{rows.length}</b> item(s)
+              {view === "all" ? (
+                <>
+                  {" "}
+                  of <b>{globallyFiltered.length}</b>
+                </>
+              ) : null}
+            </span>
           </div>
         </div>
 
@@ -461,7 +554,7 @@ export default function Page() {
           </table>
 
           {/* Pagination only for All */}
-          {view === "all" && !status.loading && rows.length > 0 && (
+          {view === "all" && !status.loading && rows.length > 0 ? (
             <div className="flex justify-between items-center px-4 py-3 border-t border-slate-200">
               <div className="text-xs text-slate-500">
                 Page {page} / {totalPages}
@@ -483,7 +576,7 @@ export default function Page() {
                 </button>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </main>
