@@ -1,3 +1,4 @@
+// app/page.js
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +17,7 @@ import {
   Columns2,
   Lock,
   Bookmark,
+  HelpCircle,
 } from "lucide-react";
 
 const REFRESH_INTERVAL_MS = 60_000;
@@ -88,6 +90,11 @@ function formatTime(ts) {
   }
 }
 
+function pct(n, d) {
+  if (!d) return 0;
+  return Math.round((n / d) * 100);
+}
+
 // ---------- UI bits ----------
 function Badge({ children, tone = "neutral" }) {
   const map = {
@@ -112,8 +119,8 @@ function Chip({ children, onRemove }) {
           type="button"
           onClick={onRemove}
           className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-slate-100"
-          aria-label="Remove filter"
-          title="Remove filter"
+          aria-label="Remove"
+          title="Remove"
         >
           <X className="h-3.5 w-3.5 text-slate-500" />
         </button>
@@ -157,7 +164,6 @@ function StarButton({ active, onClick }) {
   );
 }
 
-// Premium-locked compare button (visual lock, click opens modal)
 function CompareButtonLocked({ onClick }) {
   return (
     <button
@@ -208,8 +214,96 @@ function StatCard({ title, value, sub }) {
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="text-xs text-slate-500">{title}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
-      {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
+      {sub ? <div className="text-xs text-slate-500 mt-1">{sub}</div> : null}
     </div>
+  );
+}
+
+function Toast({ message }) {
+  if (!message) return null;
+  return (
+    <div className="fixed top-4 left-0 right-0 z-[60] px-4">
+      <div className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white shadow-lg px-4 py-3 text-sm text-slate-700">
+        {message}
+      </div>
+    </div>
+  );
+}
+
+function HelpModal({ open, onClose }) {
+  if (!open) return null;
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-slate-900">How to use this dashboard</div>
+              <div className="mt-1 text-sm text-slate-600">Decision-support, not predictions.</div>
+            </div>
+            <button
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              onClick={onClose}
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Core principles</div>
+              <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                <li className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Momentum ranks recent strength — it does not predict future price.
+                </li>
+                <li className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Confidence explains why the score is trustworthy (or not).
+                </li>
+                <li className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                  Use this to compare candidates, then do deeper research.
+                </li>
+              </ul>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-sm font-semibold text-slate-900">Quick workflow</div>
+              <ol className="mt-2 space-y-2 text-sm text-slate-700 list-decimal pl-5">
+                <li>Sort by Momentum to find leaders.</li>
+                <li>Open a row to read drivers + confidence explanation.</li>
+                <li>Star assets to track in Watchlist.</li>
+                <li>Use Share link to save your current view.</li>
+              </ol>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-sm font-semibold text-slate-900">Shortcuts</div>
+              <div className="mt-2 text-sm text-slate-700">
+                <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
+                  /
+                </span>{" "}
+                Focus search •{" "}
+                <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
+                  Esc
+                </span>{" "}
+                Close drawer / modal / clear search
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Premium (locked for now)</div>
+              <div className="mt-1 text-sm text-slate-700 leading-relaxed">
+                Compare and Saved Views are visible to communicate the roadmap. We’ll connect auth + pricing later.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -219,6 +313,7 @@ function Drawer({ open, onClose, coin }) {
   const label = coin.confidence?.label ?? "—";
   const tone = label === "High" ? "good" : label === "Medium" ? "warn" : "bad";
   const drivers = coin.breakdown?.drivers || [];
+  const whatWouldChange = coin.breakdown?.whatWouldChange || [];
 
   return (
     <>
@@ -269,6 +364,26 @@ function Drawer({ open, onClose, coin }) {
             )}
           </div>
 
+          {/* NEW: What would improve this setup */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm font-semibold text-slate-900">What would improve this setup?</div>
+            {whatWouldChange.length ? (
+              <ul className="mt-3 space-y-2">
+                {whatWouldChange.slice(0, 6).map((d, idx) => (
+                  <li key={idx} className="text-sm text-slate-700 flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
+                    <span>{d}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-3 text-sm text-slate-600">No suggestions available.</div>
+            )}
+            <div className="mt-3 text-xs text-slate-500">
+              This is a checklist-style lens — not a prediction. It describes what would strengthen the momentum signal.
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm font-semibold text-slate-900">Notes</div>
             <div className="mt-2 text-sm text-slate-600 leading-relaxed">
@@ -289,20 +404,14 @@ function PremiumModal({ open, onClose, feature = "Premium Feature" }) {
       ? {
           title: "Saved Views",
           desc: "Save and recall your preferred dashboard configurations (filters + sorting) in one click.",
-          bullets: [
-            "One-click presets (High Conviction, Balanced, Watchlist Focus)",
-            "Custom saved views (coming with auth)",
-            "Shareable view links (pairs with your Share link)",
-          ],
+          bullets: ["One-click presets (locked)", "Custom saved views (coming with auth)", "Sync across devices (future)"],
+          icon: <Bookmark className="h-5 w-5" />,
         }
       : {
           title: "Pinned Comparison",
           desc: "Compare two assets side-by-side with momentum drivers and confidence context.",
-          bullets: [
-            "Pin up to two assets to compare",
-            "Side-by-side momentum + confidence explanations",
-            "Shareable comparison links (coming with auth)",
-          ],
+          bullets: ["Pin up to two assets", "Side-by-side momentum + confidence", "Shareable comparisons (future)"],
+          icon: <Columns2 className="h-5 w-5" />,
         };
 
   return (
@@ -326,7 +435,7 @@ function PremiumModal({ open, onClose, feature = "Premium Feature" }) {
           <div className="p-5 space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center gap-2 text-slate-900 font-semibold">
-                {feature === "Saved Views" ? <Bookmark className="h-5 w-5" /> : <Columns2 className="h-5 w-5" />}
+                {copy.icon}
                 {copy.title}
                 <Badge>Premium</Badge>
               </div>
@@ -342,7 +451,7 @@ function PremiumModal({ open, onClose, feature = "Premium Feature" }) {
             </div>
 
             <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-slate-500">(No checkout/auth yet — visual lock only for now.)</div>
+              <div className="text-xs text-slate-500">(No checkout/auth yet — visual lock only.)</div>
               <button
                 className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
                 onClick={onClose}
@@ -435,8 +544,7 @@ function SavedViewsModal({ open, onClose, onSelectLocked }) {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm font-semibold text-slate-900">Why Saved Views?</div>
               <div className="mt-1 text-sm text-slate-700 leading-relaxed">
-                Most users revisit the same filtering/sorting workflow. Saved Views lets you get back to your “best lens”
-                instantly — without fiddling with controls every time.
+                Most users revisit the same filtering/sorting workflow. Saved Views gets you back to your best lens instantly.
               </div>
               <div className="mt-2 text-xs text-slate-500">Momentum ≠ prediction. This is organization + decision-support.</div>
             </div>
@@ -463,15 +571,12 @@ export default function Page() {
   const [fetchedAt, setFetchedAt] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Global filter
   const [onlyHigh, setOnlyHigh] = useState(false);
 
-  // Sorting
   const [allSortKey, setAllSortKey] = useState("score"); // score | change24 | name | price
   const [allSortDir, setAllSortDir] = useState("desc"); // asc | desc
   const [watchSort, setWatchSort] = useState("score"); // score | change24 | name | price
 
-  // Drawer
   const [selectedId, setSelectedId] = useState(null);
 
   // Premium lock states
@@ -479,29 +584,31 @@ export default function Page() {
   const [premiumFeature, setPremiumFeature] = useState("Pinned Comparison");
   const [compareTeaserVisible, setCompareTeaserVisible] = useState(false);
 
-  // Saved Views premium UI
   const [savedViewsOpen, setSavedViewsOpen] = useState(false);
   const [savedViewsTeaserVisible, setSavedViewsTeaserVisible] = useState(false);
 
-  // Share feedback
-  const [shareStatus, setShareStatus] = useState(""); // "", "copied", "failed"
+  // Help + toast
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [toast, setToast] = useState("");
 
   const inFlight = useRef(false);
 
-  // Preferences (persist)
   const [prefs, setPrefs] = useState(null);
 
-  // Defaults for "Clear filters"
   const defaultsRef = useRef({ onlyHigh: false });
 
-  // URL sync
   const hydratedRef = useRef(false);
   const lastUrlRef = useRef("");
 
-  // Refs for keyboard shortcuts
   const searchRef = useRef(null);
 
-  // --------- initial load: watchlist + prefs + URL override ----------
+  function showToast(msg) {
+    setToast(msg);
+    window.clearTimeout(showToast._t);
+    showToast._t = window.setTimeout(() => setToast(""), 1600);
+  }
+
+  // --------- initial load ----------
   useEffect(() => {
     setWatchIds(new Set(loadWatchlist()));
 
@@ -577,6 +684,10 @@ export default function Page() {
       }
 
       if (e.key === "Escape") {
+        if (helpOpen) {
+          setHelpOpen(false);
+          return;
+        }
         if (savedViewsOpen) {
           setSavedViewsOpen(false);
           return;
@@ -598,7 +709,7 @@ export default function Page() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [query, selectedId, premiumOpen, savedViewsOpen]);
+  }, [query, selectedId, premiumOpen, savedViewsOpen, helpOpen]);
 
   // --------- persist watchlist ----------
   useEffect(() => {
@@ -648,6 +759,8 @@ export default function Page() {
     setCompareTeaserVisible(false);
     setSavedViewsTeaserVisible(false);
 
+    showToast("Preferences reset.");
+
     try {
       const url = new URL(window.location.href);
       url.search = "";
@@ -660,6 +773,7 @@ export default function Page() {
     setQuery("");
     setOnlyHigh(defaultsRef.current.onlyHigh);
     setPage(1);
+    showToast("Filters cleared.");
   }
 
   // --------- data loading ----------
@@ -671,6 +785,7 @@ export default function Page() {
       if (showSpinner) setStatus({ loading: true, error: "" });
       else setIsRefreshing(true);
 
+      // NOTE: route expects ?per_page= but some older versions used per_page; keep current caller stable.
       const res = await fetch(`/api/markets?per_page=${marketLimit}`);
       const json = await res.json();
 
@@ -796,6 +911,7 @@ export default function Page() {
       const nextDir = allSortDir === "asc" ? "desc" : "asc";
       setAllSortDir(nextDir);
       updatePrefs({ allSortDir: nextDir });
+      showToast(`Sorting: ${key} ${nextDir === "asc" ? "↑" : "↓"}`);
       return;
     }
     const nextDir = key === "name" ? "asc" : "desc";
@@ -803,6 +919,7 @@ export default function Page() {
     setAllSortDir(nextDir);
     updatePrefs({ allSortKey: key, allSortDir: nextDir });
     setPage(1);
+    showToast(`Sorting: ${key} ${nextDir === "asc" ? "↑" : "↓"}`);
   }
 
   function sortHint(key) {
@@ -819,6 +936,7 @@ export default function Page() {
   function handleCompareClick() {
     setCompareTeaserVisible(true);
     openPremium("Pinned Comparison");
+    showToast("Compare is Premium (locked).");
   }
 
   function handleSavedViewsClick() {
@@ -826,10 +944,11 @@ export default function Page() {
     setSavedViewsOpen(true);
   }
 
-  function handleSelectSavedViewLocked() {
+  function handleSelectSavedViewLocked(preset) {
     setSavedViewsTeaserVisible(true);
     setSavedViewsOpen(false);
     openPremium("Saved Views");
+    showToast(`“${preset?.name || "Preset"}” is Premium (locked).`);
   }
 
   // --------- URL sync + Share URL builder ----------
@@ -867,9 +986,7 @@ export default function Page() {
 
   async function handleShare() {
     const ok = await copyToClipboard(shareUrl);
-    setShareStatus(ok ? "copied" : "failed");
-    window.clearTimeout(handleShare._t);
-    handleShare._t = window.setTimeout(() => setShareStatus(""), 1600);
+    showToast(ok ? "Link copied." : "Couldn’t copy — try again.");
   }
 
   const hasActiveFilters = query.trim().length > 0 || onlyHigh !== defaultsRef.current.onlyHigh;
@@ -879,18 +996,130 @@ export default function Page() {
     return enriched.find((c) => c.id === selectedId) || null;
   }, [selectedId, enriched]);
 
+  // ---------- NEW: Signal Context Layer ----------
+  const contextSet = useMemo(() => {
+    return view === "watchlist" ? watchlistItems : allSorted;
+  }, [view, watchlistItems, allSorted]);
+
+  const distribution = useMemo(() => {
+    const total = contextSet.length;
+    if (!total) {
+      return {
+        total: 0,
+        avgScore: "—",
+        highPct: 0,
+        medPct: 0,
+        lowPct: 0,
+        score60Pct: 0,
+      };
+    }
+
+    let high = 0;
+    let med = 0;
+    let low = 0;
+    let score60 = 0;
+    let sum = 0;
+
+    for (const c of contextSet) {
+      const s = Number(c.score ?? 0);
+      sum += s;
+      if (s >= 60) score60 += 1;
+
+      const label = c.confidence?.label;
+      if (label === "High") high += 1;
+      else if (label === "Medium") med += 1;
+      else low += 1;
+    }
+
+    const avg = Math.round(sum / total);
+
+    return {
+      total,
+      avgScore: String(avg),
+      highPct: pct(high, total),
+      medPct: pct(med, total),
+      lowPct: pct(low, total),
+      score60Pct: pct(score60, total),
+    };
+  }, [contextSet]);
+
+  const regime = useMemo(() => {
+    // Calm, heuristic context. Not a forecast.
+    const { total, score60Pct, highPct } = distribution;
+    if (!total) {
+      return {
+        label: "No data",
+        tone: "neutral",
+        sub: "Load data to compute context.",
+      };
+    }
+
+    // Thresholds tuned to feel stable and not overly reactive.
+    if (score60Pct >= 45 && highPct >= 25) {
+      return {
+        label: "Bullish Regime",
+        tone: "good",
+        sub: "Many assets show sustained strength with cleaner signals.",
+      };
+    }
+
+    if (score60Pct >= 25 || highPct >= 15) {
+      return {
+        label: "Mixed Regime",
+        tone: "warn",
+        sub: "Some leaders exist, but signal quality is uneven across the set.",
+      };
+    }
+
+    return {
+      label: "Weak Regime",
+      tone: "bad",
+      sub: "Momentum is sparse; setups are noisier and harder to rely on.",
+    };
+  }, [distribution]);
+
   return (
     <main className="min-h-screen bg-white text-slate-900">
+      <Toast message={toast} />
+
       <div className="max-w-6xl mx-auto px-5 py-8">
         {/* Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Crypto Momentum Dashboard</h1>
-            <div className="text-xs text-slate-500 mt-1">
-              {fetchedAt ? `Last updated: ${formatTime(fetchedAt)}` : ""}
-              <span className="ml-2 text-slate-300">•</span>
-              <span className="ml-2">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold">Crypto Momentum Dashboard</h1>
+              <span className="hidden sm:inline-flex">
+                <Badge tone={regime.tone}>Regime: {regime.label}</Badge>
+              </span>
+            </div>
+
+            {/* SaaS Status Bar */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-slate-500">
+                {fetchedAt ? `Last updated: ${formatTime(fetchedAt)}` : "Not updated yet"}
+              </span>
+
+              {isRefreshing ? (
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">
+                  Refreshing…
+                </span>
+              ) : null}
+
+              {status.error ? (
+                <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">
+                  {status.error}
+                </span>
+              ) : null}
+
+              <span className="text-slate-300">•</span>
+              <span className="text-slate-500">
                 Shortcuts: <b>/</b> search, <b>Esc</b> close/clear
+              </span>
+
+              {/* Mobile regime badge */}
+              <span className="sm:hidden">
+                <span className="text-slate-300">•</span>{" "}
+                <Badge tone={regime.tone}>Regime: {regime.label}</Badge>
               </span>
             </div>
           </div>
@@ -918,6 +1147,15 @@ export default function Page() {
               </button>
 
               <button
+                onClick={handleShare}
+                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
+                title="Copy a shareable link with your current state"
+              >
+                <Link2 className="h-4 w-4" />
+                Share link
+              </button>
+
+              <button
                 onClick={handleSavedViewsClick}
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
                 title="Saved Views (Premium)"
@@ -931,12 +1169,12 @@ export default function Page() {
               </button>
 
               <button
-                onClick={handleShare}
+                onClick={() => setHelpOpen(true)}
                 className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Copy a shareable link with your current state"
+                title="Help"
               >
-                <Link2 className="h-4 w-4" />
-                Share link
+                <HelpCircle className="h-4 w-4" />
+                <span className="hidden sm:inline">Help</span>
               </button>
 
               <button
@@ -948,12 +1186,6 @@ export default function Page() {
               </button>
             </div>
 
-            {shareStatus ? (
-              <div className={`text-xs ${shareStatus === "copied" ? "text-emerald-700" : "text-rose-700"}`}>
-                {shareStatus === "copied" ? "Link copied to clipboard." : "Couldn’t copy automatically — try again."}
-              </div>
-            ) : null}
-
             <div className="flex flex-wrap gap-2 items-center justify-end">
               <Toggle
                 checked={onlyHigh}
@@ -961,6 +1193,7 @@ export default function Page() {
                   setOnlyHigh(v);
                   setPage(1);
                   updatePrefs({ watchOnlyHighDefault: v });
+                  showToast(v ? "Filter: Only High confidence" : "Filter: All confidence");
                 }}
                 label="Only High confidence"
               />
@@ -975,6 +1208,7 @@ export default function Page() {
                     setMarketLimit(v);
                     setPage(1);
                     updatePrefs({ marketLimit: v });
+                    showToast(`Limit: Top ${v}`);
                   }}
                 >
                   <option value={50}>Top 50</option>
@@ -993,6 +1227,7 @@ export default function Page() {
                     setPageSize(v);
                     setPage(1);
                     updatePrefs({ pageSize: v });
+                    showToast(`Page size: ${v}`);
                   }}
                 >
                   <option value={25}>25</option>
@@ -1009,6 +1244,7 @@ export default function Page() {
                     const v = clampEnum(e.target.value, ["score", "change24", "name", "price"], "score");
                     setWatchSort(v);
                     updatePrefs({ watchSortDefault: v });
+                    showToast(`Watchlist sort: ${v}`);
                   }}
                 >
                   <option value="score">Score</option>
@@ -1018,6 +1254,34 @@ export default function Page() {
                 </select>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* NEW: Signal Context (Regime + Distribution) */}
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-semibold text-slate-900">Signal Context</div>
+                <Badge tone={regime.tone}>{regime.label}</Badge>
+                <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
+              </div>
+              <div className="mt-1 text-xs text-slate-600">{regime.sub}</div>
+            </div>
+
+            <div className="text-xs text-slate-500">
+              Basis:{" "}
+              <span className="text-slate-700 font-medium">
+                {view === "watchlist" ? "Watchlist" : "All"}
+              </span>{" "}
+              • {distribution.total ? `${distribution.total} assets` : "—"}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <StatCard title="Avg Momentum" value={distribution.avgScore} sub="Across current set" />
+            <StatCard title="Confidence Mix" value={`${distribution.highPct}% High`} sub={`${distribution.medPct}% Medium • ${distribution.lowPct}% Low`} />
+            <StatCard title="Strength Density" value={`${distribution.score60Pct}% ≥ 60`} sub="How many assets show sustained strength" />
           </div>
         </div>
 
@@ -1051,6 +1315,7 @@ export default function Page() {
                 onRemove={() => {
                   setQuery("");
                   setPage(1);
+                  showToast("Search cleared.");
                 }}
               >
                 Search: <span className="font-medium">{query.trim()}</span>
@@ -1063,6 +1328,7 @@ export default function Page() {
                   setOnlyHigh(false);
                   setPage(1);
                   updatePrefs({ watchOnlyHighDefault: false });
+                  showToast("Filter: All confidence");
                 }}
               >
                 Only High confidence
@@ -1076,13 +1342,23 @@ export default function Page() {
             </Chip>
 
             {compareTeaserVisible ? (
-              <Chip onRemove={() => setCompareTeaserVisible(false)}>
+              <Chip
+                onRemove={() => {
+                  setCompareTeaserVisible(false);
+                  showToast("Compare teaser dismissed.");
+                }}
+              >
                 Compare <span className="text-slate-400">(Premium)</span>
               </Chip>
             ) : null}
 
             {savedViewsTeaserVisible ? (
-              <Chip onRemove={() => setSavedViewsTeaserVisible(false)}>
+              <Chip
+                onRemove={() => {
+                  setSavedViewsTeaserVisible(false);
+                  showToast("Saved Views teaser dismissed.");
+                }}
+              >
                 Saved Views <span className="text-slate-400">(Premium)</span>
               </Chip>
             ) : null}
@@ -1105,6 +1381,7 @@ export default function Page() {
             onClick={() => {
               setView("all");
               setPage(1);
+              showToast("View: All");
             }}
             className={`px-4 py-2 rounded-xl border ${
               view === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"
@@ -1116,6 +1393,7 @@ export default function Page() {
             onClick={() => {
               setView("watchlist");
               setPage(1);
+              showToast("View: Watchlist");
             }}
             className={`px-4 py-2 rounded-xl border ${
               view === "watchlist"
@@ -1245,7 +1523,13 @@ export default function Page() {
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-2">
-                          <StarButton active={watched} onClick={() => toggleWatch(c.id)} />
+                          <StarButton
+                            active={watched}
+                            onClick={() => {
+                              toggleWatch(c.id);
+                              showToast(watched ? "Removed from watchlist." : "Added to watchlist.");
+                            }}
+                          />
                           <CompareButtonLocked onClick={handleCompareClick} />
                         </div>
                       </td>
@@ -1321,14 +1605,20 @@ export default function Page() {
               <div className="flex items-center gap-2 justify-end">
                 <button
                   type="button"
-                  onClick={() => setCompareTeaserVisible(false)}
+                  onClick={() => {
+                    setCompareTeaserVisible(false);
+                    showToast("Compare teaser dismissed.");
+                  }}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
                 >
                   Dismiss
                 </button>
                 <button
                   type="button"
-                  onClick={() => openPremium("Pinned Comparison")}
+                  onClick={() => {
+                    openPremium("Pinned Comparison");
+                    showToast("Compare is Premium (locked).");
+                  }}
                   className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
                 >
                   Upgrade to unlock
@@ -1351,6 +1641,8 @@ export default function Page() {
       />
 
       <PremiumModal open={premiumOpen} onClose={() => setPremiumOpen(false)} feature={premiumFeature} />
+
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </main>
   );
 }
