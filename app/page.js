@@ -1,165 +1,202 @@
-// app/page.js
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { computeConfidence, computeMomentumBreakdown } from "../lib/momentum";
-import { loadWatchlist, saveWatchlist } from "../lib/watchlist";
-import { loadPreferences, resetPreferences, savePreferences } from "../lib/preferences";
-import {
-  Star,
-  RefreshCw,
-  ChevronLeft,
-  ChevronRight,
-  Filter,
-  X,
-  Link2,
-  ArrowUpDown,
-  Columns2,
-  Lock,
-  Bookmark,
-  HelpCircle,
-} from "lucide-react";
 
-const REFRESH_INTERVAL_MS = 60_000;
+/* -----------------------------
+   Small utilities
+------------------------------ */
 
-// ---------- utils ----------
+function pctWidth(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "0%";
+  return `${Math.max(0, Math.min(100, v))}%`;
+}
+
+function parseBoolParam(v) {
+  if (v == null) return null;
+  return v === "1" || v === "true";
+}
+
+function clampInt(n, min, max) {
+  const v = Number.parseInt(String(n), 10);
+  if (!Number.isFinite(v)) return null;
+  return Math.max(min, Math.min(max, v));
+}
+
 function formatMoney(n) {
-  if (!n && n !== 0) return "—";
-  if (n >= 1) return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
-  return "$" + Number(n).toPrecision(3);
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  if (v >= 1) return v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  if (v >= 0.01) return v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 4 });
+  return v.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 6 });
 }
 
 function formatPct(n) {
-  if (!n && n !== 0) return "—";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${Number(n).toFixed(2)}%`;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}${v.toFixed(2)}%`;
 }
 
-function clampEnum(value, allowed, fallback) {
-  return allowed.includes(value) ? value : fallback;
+function labelFromConfidence(c) {
+  return (typeof c?.confidence === "string" ? c.confidence : c?.confidence?.label) ?? "—";
 }
 
-function clampNum(value, allowed, fallback) {
-  const n = Number(value);
-  return allowed.includes(n) ? n : fallback;
+function confidenceToNumber(c) {
+  const raw = c?.confidenceRaw;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  const label = labelFromConfidence(c);
+  if (label === "High") return 3;
+  if (label === "Medium") return 2;
+  if (label === "Low") return 1;
+  return 0;
 }
 
-function clampPage(value, fallback = 1) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(1, Math.floor(n));
+function liquidityToNumber(c) {
+  const label = String(c?.liquidityStrength ?? "").toLowerCase();
+  if (label === "high") return 3;
+  if (label === "medium") return 2;
+  if (label === "low") return 1;
+  return 0;
 }
 
-function toBool(value) {
-  if (value == null) return null;
-  const v = String(value).toLowerCase().trim();
-  if (["1", "true", "yes", "on"].includes(v)) return true;
-  if (["0", "false", "no", "off"].includes(v)) return false;
-  return null;
+function getValueForSort(c, key) {
+  switch (key) {
+    case "name":
+      return String(c?.name || "");
+    case "price":
+      return Number((c?.current_price ?? c?.priceUsd) ?? 0);
+    case "change24":
+      return Number((c?.price_change_percentage_24h_in_currency ?? c?.priceChange24h) ?? 0);
+    case "score":
+      return Number((c?.score ?? c?.momentumScore) ?? 0);
+    case "confidence":
+      return confidenceToNumber(c);
+    default:
+      return 0;
+  }
 }
 
-async function copyToClipboard(text) {
-  try {
-    if (navigator?.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
+function sortArray(arr, key, dir) {
+  const mult = dir === "asc" ? 1 : -1;
+  const out = [...arr];
+  out.sort((a, b) => {
+    const va = getValueForSort(a, key);
+    const vb = getValueForSort(b, key);
+    if (typeof va === "string" || typeof vb === "string") {
+      return String(va).localeCompare(String(vb)) * mult;
     }
+    return (Number(va) - Number(vb)) * mult;
+  });
+  return out;
+}
+
+/* -----------------------------
+   Local storage
+------------------------------ */
+
+const LS_WATCH = "cad2_watchlist_v1";
+const LS_PREFS = "cad2_prefs_v6";
+
+function loadWatchlist() {
+  try {
+    const raw = localStorage.getItem(LS_WATCH);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveWatchlist(set) {
+  try {
+    localStorage.setItem(LS_WATCH, JSON.stringify([...set]));
   } catch {}
+}
+
+function loadPrefs() {
   try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.top = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
+    const raw = localStorage.getItem(LS_PREFS);
+    return raw ? JSON.parse(raw) : {};
   } catch {
-    return false;
+    return {};
   }
 }
 
-function formatTime(ts) {
-  if (!ts) return "";
+function savePrefs(p) {
   try {
-    return new Date(ts).toLocaleString();
-  } catch {
-    return "";
-  }
+    localStorage.setItem(LS_PREFS, JSON.stringify(p));
+  } catch {}
 }
 
-function pct(n, d) {
-  if (!d) return 0;
-  return Math.round((n / d) * 100);
-}
+/* -----------------------------
+   UI atoms
+------------------------------ */
 
-// ---------- UI bits ----------
-function Badge({ children, tone = "neutral" }) {
+function Badge({ tone = "neutral", children }) {
+  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
   const map = {
     good: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    warn: "bg-amber-50 text-amber-700 border-amber-200",
+    warn: "bg-amber-50 text-amber-800 border-amber-200",
     bad: "bg-rose-50 text-rose-700 border-rose-200",
     neutral: "bg-slate-50 text-slate-700 border-slate-200",
   };
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${map[tone]}`}>
-      {children}
-    </span>
-  );
+  return <span className={`${base} ${map[tone] || map.neutral}`}>{children}</span>;
 }
 
-function Chip({ children, onRemove }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700">
-      {children}
-      {onRemove ? (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-slate-100"
-          aria-label="Remove"
-          title="Remove"
-        >
-          <X className="h-3.5 w-3.5 text-slate-500" />
-        </button>
-      ) : null}
-    </span>
-  );
-}
-
-function Toggle({ checked, onChange, label }) {
+function Pill({ active, onClick, children, title }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!checked)}
-      className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-      aria-pressed={checked}
+      title={title}
+      onClick={onClick}
+      className={[
+        "rounded-full px-3 py-1.5 text-xs border transition",
+        active
+          ? "bg-slate-900 text-white border-slate-900"
+          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
+      ].join(" ")}
     >
-      <span
-        className={`inline-flex h-5 w-9 items-center rounded-full border transition ${
-          checked ? "bg-slate-900 border-slate-900 justify-end" : "bg-slate-100 border-slate-200 justify-start"
-        }`}
-      >
-        <span className="h-4 w-4 rounded-full bg-white shadow" />
-      </span>
-      <span>{label}</span>
+      {children}
     </button>
+  );
+}
+
+function FilterChip({ label, onClear, title }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClear}
+      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+    >
+      <span>{label}</span>
+      <span className="text-slate-400">×</span>
+    </button>
+  );
+}
+
+function IconStar({ filled }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" className={filled ? "text-amber-500" : "text-slate-400"}>
+      <path
+        fill="currentColor"
+        d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
+        opacity={filled ? 1 : 0.35}
+      />
+    </svg>
   );
 }
 
 function StarButton({ active, onClick }) {
   return (
     <button
+      className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-slate-100"
       onClick={onClick}
-      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition ${
-        active ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200 hover:bg-slate-50"
-      }`}
-      title={active ? "Remove from watchlist" : "Add to watchlist"}
-      aria-label={active ? "Remove from watchlist" : "Add to watchlist"}
+      title={active ? "Unwatch" : "Watch"}
+      type="button"
     >
-      <Star className={`h-4 w-4 ${active ? "text-amber-700" : "text-slate-400"}`} fill={active ? "currentColor" : "none"} />
+      <IconStar filled={active} />
     </button>
   );
 }
@@ -167,15 +204,12 @@ function StarButton({ active, onClick }) {
 function CompareButtonLocked({ onClick }) {
   return (
     <button
+      className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-slate-100"
       onClick={onClick}
-      className="h-9 w-9 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center hover:bg-slate-100 transition"
-      title="Compare (Premium)"
-      aria-label="Compare (Premium)"
+      title="Premium: pinned comparison"
+      type="button"
     >
-      <div className="relative">
-        <Columns2 className="h-4 w-4 text-slate-500" />
-        <Lock className="h-3 w-3 text-slate-500 absolute -right-2 -bottom-2" />
-      </div>
+      <span className="text-slate-500 text-xs font-semibold">⛔</span>
     </button>
   );
 }
@@ -183,701 +217,395 @@ function CompareButtonLocked({ onClick }) {
 function SkeletonRow() {
   return (
     <tr className="animate-pulse">
-      <td className="px-4 py-4">
-        <div className="flex items-center gap-2">
-          <div className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200" />
-          <div className="h-9 w-9 rounded-xl bg-slate-100 border border-slate-200" />
-        </div>
+      <td className="px-4 py-3">
+        <div className="h-6 w-16 bg-slate-100 rounded" />
       </td>
-      <td className="px-4 py-4">
-        <div className="h-4 bg-slate-100 rounded w-40" />
-        <div className="mt-2 h-3 bg-slate-100 rounded w-24" />
+      <td className="px-4 py-3">
+        <div className="h-4 w-52 bg-slate-100 rounded" />
+        <div className="mt-2 h-3 w-40 bg-slate-100 rounded" />
       </td>
-      <td className="px-4 py-4 text-right">
-        <div className="ml-auto h-4 bg-slate-100 rounded w-20" />
+      <td className="px-4 py-3 text-right">
+        <div className="h-4 w-20 bg-slate-100 rounded ml-auto" />
       </td>
-      <td className="px-4 py-4 text-right">
-        <div className="ml-auto h-4 bg-slate-100 rounded w-16" />
+      <td className="px-4 py-3 text-right">
+        <div className="h-4 w-16 bg-slate-100 rounded ml-auto" />
       </td>
-      <td className="px-4 py-4 text-right">
-        <div className="ml-auto h-4 bg-slate-100 rounded w-12" />
+      <td className="px-4 py-3 text-right">
+        <div className="h-4 w-12 bg-slate-100 rounded ml-auto" />
       </td>
-      <td className="px-4 py-4">
-        <div className="h-6 w-24 rounded-full bg-slate-100" />
+      <td className="px-4 py-3">
+        <div className="h-6 w-20 bg-slate-100 rounded-full" />
       </td>
     </tr>
   );
 }
 
-function StatCard({ title, value, sub }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="text-xs text-slate-500">{title}</div>
-      <div className="mt-1 text-xl font-semibold">{value}</div>
-      {sub ? <div className="text-xs text-slate-500 mt-1">{sub}</div> : null}
-    </div>
-  );
-}
-
-function Toast({ message }) {
-  if (!message) return null;
-  return (
-    <div className="fixed top-4 left-0 right-0 z-[60] px-4">
-      <div className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white shadow-lg px-4 py-3 text-sm text-slate-700">
-        {message}
-      </div>
-    </div>
-  );
-}
-
-function HelpModal({ open, onClose }) {
+function Modal({ open, title, onClose, children }) {
   if (!open) return null;
-
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-lg font-semibold text-slate-900">How to use this dashboard</div>
-              <div className="mt-1 text-sm text-slate-600">Decision-support, not predictions.</div>
-            </div>
-            <button
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              onClick={onClose}
-            >
-              Close
-            </button>
-          </div>
-
-          <div className="p-5 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Core principles</div>
-              <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                <li className="flex gap-2">
-                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Momentum ranks recent strength — it does not predict future price.
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Confidence explains why the score is trustworthy (or not).
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                  Use this to compare candidates, then do deeper research.
-                </li>
-              </ul>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-semibold text-slate-900">Quick workflow</div>
-              <ol className="mt-2 space-y-2 text-sm text-slate-700 list-decimal pl-5">
-                <li>Sort by Momentum to find leaders.</li>
-                <li>Open a row to read drivers + confidence explanation.</li>
-                <li>Star assets to track in Watchlist.</li>
-                <li>Use Share link to save your current view.</li>
-              </ol>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="text-sm font-semibold text-slate-900">Shortcuts</div>
-              <div className="mt-2 text-sm text-slate-700">
-                <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
-                  /
-                </span>{" "}
-                Focus search •{" "}
-                <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
-                  Esc
-                </span>{" "}
-                Close drawer / modal / clear search
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Premium (locked for now)</div>
-              <div className="mt-1 text-sm text-slate-700 leading-relaxed">
-                Compare and Saved Views are visible to communicate the roadmap. We’ll connect auth + pricing later.
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function Drawer({ open, onClose, coin }) {
-  if (!open || !coin) return null;
-
-  const label = coin.confidence?.label ?? "—";
-  const tone = label === "High" ? "good" : label === "Medium" ? "warn" : "bad";
-  const drivers = coin.breakdown?.drivers || [];
-  const whatWouldChange = coin.breakdown?.whatWouldChange || [];
-
-  return (
-    <>
-      <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} aria-hidden="true" />
-      <div className="fixed right-0 top-0 z-50 h-full w-full max-w-lg bg-white shadow-2xl border-l border-slate-200">
-        <div className="flex items-start justify-between p-5 border-b border-slate-200">
-          <div className="min-w-0">
-            <div className="text-lg font-semibold text-slate-900 truncate">{coin.name}</div>
-            <div className="mt-1 text-sm text-slate-500 truncate">
-              {coin.symbol?.toUpperCase()} • {formatMoney(coin.current_price)} • 24h{" "}
-              {formatPct(coin.price_change_percentage_24h_in_currency)}
-            </div>
-          </div>
-          <button
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-            onClick={onClose}
-          >
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="absolute left-1/2 top-8 w-[min(900px,calc(100%-24px))] -translate-x-1/2 rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div className="font-semibold text-slate-900">{title}</div>
+          <button className="rounded-lg px-2 py-1 text-slate-600 hover:bg-slate-100" onClick={onClose} type="button">
             Close
           </button>
         </div>
-
-        <div className="p-5 space-y-4 overflow-y-auto h-[calc(100%-76px)]">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-900">Momentum Score</div>
-              <div className="text-2xl font-semibold text-slate-900">{coin.score}</div>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <Badge tone={tone}>Confidence: {label}</Badge>
-              <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
-            </div>
-            <p className="mt-3 text-sm text-slate-700 leading-relaxed">{coin.confidence?.explanation || ""}</p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-sm font-semibold text-slate-900">What’s driving this score</div>
-            {drivers.length ? (
-              <ul className="mt-3 space-y-2">
-                {drivers.slice(0, 8).map((d, idx) => (
-                  <li key={idx} className="text-sm text-slate-700 flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                    <span>{d}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="mt-3 text-sm text-slate-600">No breakdown available.</div>
-            )}
-          </div>
-
-          {/* NEW: What would improve this setup */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-sm font-semibold text-slate-900">What would improve this setup?</div>
-            {whatWouldChange.length ? (
-              <ul className="mt-3 space-y-2">
-                {whatWouldChange.slice(0, 6).map((d, idx) => (
-                  <li key={idx} className="text-sm text-slate-700 flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                    <span>{d}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="mt-3 text-sm text-slate-600">No suggestions available.</div>
-            )}
-            <div className="mt-3 text-xs text-slate-500">
-              This is a checklist-style lens — not a prediction. It describes what would strengthen the momentum signal.
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-sm font-semibold text-slate-900">Notes</div>
-            <div className="mt-2 text-sm text-slate-600 leading-relaxed">
-              Use momentum for ranking and timing context — not as a price prediction.
-            </div>
-          </div>
-        </div>
+        <div className="p-5">{children}</div>
       </div>
-    </>
+    </div>
   );
 }
 
-function PremiumModal({ open, onClose, feature = "Premium Feature" }) {
-  if (!open) return null;
+/* -----------------------------
+   Explainability Snapshot UI
+------------------------------ */
 
-  const copy =
-    feature === "Saved Views"
-      ? {
-          title: "Saved Views",
-          desc: "Save and recall your preferred dashboard configurations (filters + sorting) in one click.",
-          bullets: ["One-click presets (locked)", "Custom saved views (coming with auth)", "Sync across devices (future)"],
-          icon: <Bookmark className="h-5 w-5" />,
-        }
-      : {
-          title: "Pinned Comparison",
-          desc: "Compare two assets side-by-side with momentum drivers and confidence context.",
-          bullets: ["Pin up to two assets", "Side-by-side momentum + confidence", "Shareable comparisons (future)"],
-          icon: <Columns2 className="h-5 w-5" />,
-        };
-
+function KeyValue({ k, v }) {
   return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-        <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-lg font-semibold text-slate-900">Premium Feature</div>
-              <div className="mt-1 text-sm text-slate-600">{copy.title} is available on the paid plan.</div>
-            </div>
-            <button
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              onClick={onClose}
-            >
-              Close
-            </button>
-          </div>
-
-          <div className="p-5 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex items-center gap-2 text-slate-900 font-semibold">
-                {copy.icon}
-                {copy.title}
-                <Badge>Premium</Badge>
-              </div>
-              <p className="mt-2 text-sm text-slate-700 leading-relaxed">{copy.desc}</p>
-              <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                {copy.bullets.map((b, i) => (
-                  <li key={i} className="flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
-                    <span>{b}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-slate-500">(No checkout/auth yet — visual lock only.)</div>
-              <button
-                className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-                onClick={onClose}
-                title="Placeholder CTA (auth/checkout later)"
-              >
-                View pricing
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <div className="flex items-baseline justify-between gap-3 py-1">
+      <div className="text-xs text-slate-500">{k}</div>
+      <div className="text-sm font-semibold text-slate-900">{v}</div>
+    </div>
   );
 }
 
-function SavedViewsModal({ open, onClose, onSelectLocked }) {
-  if (!open) return null;
+function ReasonChip({ tone = "neutral", children }) {
+  const map = {
+    good: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    warn: "bg-amber-50 text-amber-900 border-amber-200",
+    bad: "bg-rose-50 text-rose-800 border-rose-200",
+    neutral: "bg-slate-50 text-slate-800 border-slate-200",
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${map[tone] || map.neutral}`}>
+      {children}
+    </span>
+  );
+}
 
-  const presets = [
-    {
-      name: "High Conviction",
-      desc: "Only High confidence • Sort by Score (desc) • Top 100",
-      tags: ["High only", "Score ↓", "Top 100"],
-    },
-    {
-      name: "Balanced",
-      desc: "All confidence • Sort by Score (desc) • Top 250",
-      tags: ["All", "Score ↓", "Top 250"],
-    },
-    {
-      name: "Watchlist Focus",
-      desc: "Watchlist view • Sort by Score • Quick review",
-      tags: ["Watchlist", "Score ↓"],
-    },
+function buildExplainSnapshot(a) {
+  if (!a) return { bullets: [], chips: [] };
+
+  const score = Number(a.score ?? a.momentumScore ?? 0) || 0;
+  const conf = labelFromConfidence(a);
+  const liq = a.liquidityStrength ?? "—";
+  const regime = a.regime ?? "—";
+  const change24 = Number(a.price_change_percentage_24h_in_currency ?? a.priceChange24h);
+  const vol = a.volatility;
+
+  const chips = [];
+
+  if (liq === "High") chips.push({ tone: "good", text: "High liquidity supports confidence" });
+  else if (liq === "Medium") chips.push({ tone: "warn", text: "Moderate liquidity adds risk" });
+  else if (liq === "Low") chips.push({ tone: "bad", text: "Low liquidity reduces confidence" });
+  else chips.push({ tone: "neutral", text: "Liquidity unknown" });
+
+  if (regime === "Risk-On") chips.push({ tone: "good", text: "Market regime supportive" });
+  else if (regime === "Neutral") chips.push({ tone: "warn", text: "Market regime mixed" });
+  else if (regime === "Risk-Off") chips.push({ tone: "bad", text: "Market regime defensive" });
+  else chips.push({ tone: "neutral", text: "Regime unknown" });
+
+  if (typeof vol === "number") {
+    if (vol <= 3) chips.push({ tone: "good", text: "Lower volatility" });
+    else if (vol <= 6) chips.push({ tone: "warn", text: "Moderate volatility" });
+    else chips.push({ tone: "bad", text: "High volatility" });
+  }
+
+  if (Number.isFinite(change24)) {
+    if (change24 >= 8) chips.push({ tone: "warn", text: "Large 24h move (check stability)" });
+    if (change24 <= -8) chips.push({ tone: "warn", text: "Sharp drawdown (risk elevated)" });
+  }
+
+  const bullets = [
+    `Momentum is a multi-factor score (not predictive). Current value: ${score}.`,
+    `Confidence is liquidity- and volatility-adjusted: ${conf}.`,
+    `Regime: ${regime}. Liquidity: ${liq}.`,
   ];
 
-  return (
-    <>
-      <div className="fixed inset-0 z-50 bg-black/30" onClick={onClose} aria-hidden="true" />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-        <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-                <Bookmark className="h-5 w-5" />
-                Saved Views
-                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-                  <Lock className="h-3.5 w-3.5" />
-                  Premium
-                </span>
-              </div>
-              <div className="mt-1 text-sm text-slate-600">One-click presets (locked for now).</div>
-            </div>
-            <button
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              onClick={onClose}
-            >
-              Close
-            </button>
-          </div>
-
-          <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-            {presets.map((p) => (
-              <button
-                key={p.name}
-                onClick={() => onSelectLocked(p)}
-                className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:bg-slate-50 transition"
-                title="Premium locked"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="text-sm font-semibold text-slate-900">{p.name}</div>
-                  <Lock className="h-4 w-4 text-slate-500" />
-                </div>
-                <div className="mt-2 text-sm text-slate-600">{p.desc}</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {p.tags.map((t) => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <div className="px-5 pb-5">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Why Saved Views?</div>
-              <div className="mt-1 text-sm text-slate-700 leading-relaxed">
-                Most users revisit the same filtering/sorting workflow. Saved Views gets you back to your best lens instantly.
-              </div>
-              <div className="mt-2 text-xs text-slate-500">Momentum ≠ prediction. This is organization + decision-support.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
-  );
+  return { bullets, chips };
 }
 
+/* -----------------------------
+   Page
+------------------------------ */
+
 export default function Page() {
-  const [coins, setCoins] = useState([]);
   const [status, setStatus] = useState({ loading: true, error: "" });
+  const [assets, setAssets] = useState([]);
 
-  const [query, setQuery] = useState("");
   const [view, setView] = useState("all"); // all | watchlist
+  const [search, setSearch] = useState("");
+  const [onlyHigh, setOnlyHigh] = useState(false);
 
-  const [watchIds, setWatchIds] = useState(new Set());
+  const [regimeFilter, setRegimeFilter] = useState("All"); // All | Risk-On | Neutral | Risk-Off
+  const [liquidityFilter, setLiquidityFilter] = useState("Any"); // Any | Medium+ | High
 
-  const [marketLimit, setMarketLimit] = useState(250);
+  const [speculativeMode, setSpeculativeMode] = useState(false); // premium locked (visual only)
+
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
-  const [fetchedAt, setFetchedAt] = useState("");
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [allSortKey, setAllSortKey] = useState("score"); // name | price | change24 | score | confidence
+  const [allSortDir, setAllSortDir] = useState("desc");
 
-  const [onlyHigh, setOnlyHigh] = useState(false);
-
-  const [allSortKey, setAllSortKey] = useState("score"); // score | change24 | name | price
-  const [allSortDir, setAllSortDir] = useState("desc"); // asc | desc
-  const [watchSort, setWatchSort] = useState("score"); // score | change24 | name | price
+  const [watchSort, setWatchSort] = useState("name"); // name | score | confidence
+  const [watchIds, setWatchIds] = useState(new Set());
 
   const [selectedId, setSelectedId] = useState(null);
+  const [showRaw, setShowRaw] = useState(false);
 
-  // Premium lock states
-  const [premiumOpen, setPremiumOpen] = useState(false);
-  const [premiumFeature, setPremiumFeature] = useState("Pinned Comparison");
-  const [compareTeaserVisible, setCompareTeaserVisible] = useState(false);
-
-  const [savedViewsOpen, setSavedViewsOpen] = useState(false);
-  const [savedViewsTeaserVisible, setSavedViewsTeaserVisible] = useState(false);
-
-  // Help + toast
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [toast, setToast] = useState("");
-
-  const inFlight = useRef(false);
-
-  const [prefs, setPrefs] = useState(null);
-
-  const defaultsRef = useRef({ onlyHigh: false });
-
-  const hydratedRef = useRef(false);
+  // Shareable URL state control
+  const urlHydratedRef = useRef(false);
   const lastUrlRef = useRef("");
 
-  const searchRef = useRef(null);
-
-  function showToast(msg) {
-    setToast(msg);
-    window.clearTimeout(showToast._t);
-    showToast._t = window.setTimeout(() => setToast(""), 1600);
-  }
-
-  // --------- initial load ----------
+  // URL-first hydration, then prefs
   useEffect(() => {
-    setWatchIds(new Set(loadWatchlist()));
+    setWatchIds(loadWatchlist());
 
-    const p = loadPreferences();
-    setPrefs(p);
+    const sp = new URLSearchParams(window.location.search);
 
-    const baseMarketLimit = clampNum(p.marketLimit, [50, 100, 250], 250);
-    const basePageSize = clampNum(p.pageSize, [25, 50], 25);
-    const baseOnlyHigh = !!p.watchOnlyHighDefault;
-
-    const baseAllSortKey = clampEnum(p.allSortKey, ["score", "change24", "name", "price"], "score");
-    const baseAllSortDir = clampEnum(p.allSortDir, ["asc", "desc"], "desc");
-    const baseWatchSort = clampEnum(p.watchSortDefault, ["score", "change24", "name", "price"], "score");
-
-    defaultsRef.current.onlyHigh = baseOnlyHigh;
-
-    let urlView = null;
-    let urlQ = null;
-    let urlHigh = null;
-    let urlLimit = null;
-    let urlSize = null;
-    let urlPage = null;
-
-    let urlSort = null;
-    let urlDir = null;
-    let urlWsort = null;
-    let urlSel = null;
-
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      urlView = sp.get("view");
-      urlQ = sp.get("q");
-      urlHigh = toBool(sp.get("high"));
-      urlLimit = sp.get("limit");
-      urlSize = sp.get("size");
-      urlPage = sp.get("page");
-
-      urlSort = sp.get("sort");
-      urlDir = sp.get("dir");
-      urlWsort = sp.get("wsort");
-      urlSel = sp.get("sel");
-    } catch {}
-
-    setView(clampEnum(urlView, ["all", "watchlist"], "all"));
-    setQuery(typeof urlQ === "string" ? urlQ : "");
-
-    const nextOnlyHigh = urlHigh === null ? baseOnlyHigh : urlHigh;
-    setOnlyHigh(nextOnlyHigh);
-
-    setMarketLimit(clampNum(urlLimit, [50, 100, 250], baseMarketLimit));
-    setPageSize(clampNum(urlSize, [25, 50], basePageSize));
-    setPage(clampPage(urlPage, 1));
-
-    setAllSortKey(clampEnum(urlSort, ["score", "change24", "name", "price"], baseAllSortKey));
-    setAllSortDir(clampEnum(urlDir, ["asc", "desc"], baseAllSortDir));
-    setWatchSort(clampEnum(urlWsort, ["score", "change24", "name", "price"], baseWatchSort));
-
-    setSelectedId(urlSel ? String(urlSel) : null);
-
-    hydratedRef.current = true;
-  }, []);
-
-  // --------- keyboard shortcuts ----------
-  useEffect(() => {
-    function onKeyDown(e) {
-      const tag = (e.target?.tagName || "").toLowerCase();
-      const isTyping = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
-
-      if (e.key === "/" && !isTyping) {
-        e.preventDefault();
-        searchRef.current?.focus?.();
-        return;
-      }
-
-      if (e.key === "Escape") {
-        if (helpOpen) {
-          setHelpOpen(false);
-          return;
-        }
-        if (savedViewsOpen) {
-          setSavedViewsOpen(false);
-          return;
-        }
-        if (premiumOpen) {
-          setPremiumOpen(false);
-          return;
-        }
-        if (selectedId) {
-          setSelectedId(null);
-          return;
-        }
-        if (query) {
-          setQuery("");
-          setPage(1);
-        }
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [query, selectedId, premiumOpen, savedViewsOpen, helpOpen]);
-
-  // --------- persist watchlist ----------
-  useEffect(() => {
-    saveWatchlist(Array.from(watchIds));
-  }, [watchIds]);
-
-  // --------- persist prefs ----------
-  useEffect(() => {
-    if (!prefs) return;
-    savePreferences(prefs);
-  }, [prefs]);
-
-  function updatePrefs(patch) {
-    setPrefs((prev) => {
-      const base = prev || loadPreferences();
-      return { ...base, ...(patch || {}) };
-    });
-  }
-
-  function doResetPreferences() {
-    resetPreferences();
-    const p = loadPreferences();
-    setPrefs(p);
-
-    const baseMarketLimit = clampNum(p.marketLimit, [50, 100, 250], 250);
-    const basePageSize = clampNum(p.pageSize, [25, 50], 25);
-    const baseOnlyHigh = !!p.watchOnlyHighDefault;
-
-    const baseAllSortKey = clampEnum(p.allSortKey, ["score", "change24", "name", "price"], "score");
-    const baseAllSortDir = clampEnum(p.allSortDir, ["asc", "desc"], "desc");
-    const baseWatchSort = clampEnum(p.watchSortDefault, ["score", "change24", "name", "price"], "score");
-
-    setMarketLimit(baseMarketLimit);
-    setPageSize(basePageSize);
-
-    setOnlyHigh(baseOnlyHigh);
-    defaultsRef.current.onlyHigh = baseOnlyHigh;
-
-    setAllSortKey(baseAllSortKey);
-    setAllSortDir(baseAllSortDir);
-    setWatchSort(baseWatchSort);
-
-    setQuery("");
-    setPage(1);
-    setSelectedId(null);
-
-    setCompareTeaserVisible(false);
-    setSavedViewsTeaserVisible(false);
-
-    showToast("Preferences reset.");
-
-    try {
-      const url = new URL(window.location.href);
-      url.search = "";
-      window.history.replaceState({}, "", url.toString());
-      lastUrlRef.current = url.toString();
-    } catch {}
-  }
-
-  function clearFilters() {
-    setQuery("");
-    setOnlyHigh(defaultsRef.current.onlyHigh);
-    setPage(1);
-    showToast("Filters cleared.");
-  }
-
-  // --------- data loading ----------
-  async function load(showSpinner = true) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-
-    try {
-      if (showSpinner) setStatus({ loading: true, error: "" });
-      else setIsRefreshing(true);
-
-      // NOTE: route expects ?per_page= but some older versions used per_page; keep current caller stable.
-      const res = await fetch(`/api/markets?per_page=${marketLimit}`);
-      const json = await res.json();
-
-      setCoins(json.data || []);
-      setFetchedAt(json.fetchedAt);
-      setStatus({ loading: false, error: "" });
-    } catch {
-      setStatus({ loading: false, error: "Failed to load data." });
-    } finally {
-      setIsRefreshing(false);
-      inFlight.current = false;
-    }
-  }
-
-  useEffect(() => {
-    load(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marketLimit]);
-
-  useEffect(() => {
-    const id = setInterval(() => load(false), REFRESH_INTERVAL_MS);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marketLimit]);
-
-  // --------- compute model outputs ----------
-  const enriched = useMemo(() => {
-    return coins.map((c) => {
-      const breakdown = computeMomentumBreakdown(c);
-      const confidence = computeConfidence(breakdown);
-      return { ...c, breakdown, score: breakdown.score, confidence };
-    });
-  }, [coins]);
-
-  const searched = useMemo(() => {
-    const q = query.toLowerCase().trim();
-    if (!q) return enriched;
-    return enriched.filter((c) => c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q));
-  }, [enriched, query]);
-
-  const globallyFiltered = useMemo(() => {
-    if (!onlyHigh) return searched;
-    return searched.filter((c) => c.confidence?.label === "High");
-  }, [searched, onlyHigh]);
-
-  // Sorting helper
-  function sortArray(arr, key, dir) {
-    const mult = dir === "asc" ? 1 : -1;
-
-    const get = (c) => {
-      switch (key) {
-        case "name":
-          return String(c.name || "");
-        case "price":
-          return Number(c.current_price ?? 0);
-        case "change24":
-          return Number(c.price_change_percentage_24h_in_currency ?? 0);
-        case "score":
-        default:
-          return Number(c.score ?? 0);
-      }
+    const has = {
+      view: sp.has("view"),
+      q: sp.has("q"),
+      high: sp.has("high"),
+      regime: sp.has("regime"),
+      liq: sp.has("liq"),
+      sort: sp.has("sort"),
+      dir: sp.has("dir"),
+      page: sp.has("page"),
+      ps: sp.has("ps"),
+      ws: sp.has("ws"),
     };
 
-    const out = [...arr];
-    out.sort((a, b) => {
-      const va = get(a);
-      const vb = get(b);
-      if (typeof va === "string" || typeof vb === "string") {
-        return String(va).localeCompare(String(vb)) * mult;
-      }
-      return (va - vb) * mult;
+    // URL
+    if (has.view) {
+      const v = sp.get("view");
+      if (v === "all" || v === "watchlist") setView(v);
+    }
+    if (has.q) setSearch(sp.get("q") ?? "");
+
+    if (has.high) {
+      const b = parseBoolParam(sp.get("high"));
+      if (typeof b === "boolean") setOnlyHigh(b);
+    }
+
+    if (has.regime) {
+      const r = sp.get("regime");
+      if (["All", "Risk-On", "Neutral", "Risk-Off"].includes(String(r))) setRegimeFilter(String(r));
+    }
+
+    if (has.liq) {
+      const l = sp.get("liq");
+      if (["Any", "Medium+", "High"].includes(String(l))) setLiquidityFilter(String(l));
+    }
+
+    if (has.sort) {
+      const k = sp.get("sort");
+      if (["name", "price", "change24", "score", "confidence"].includes(String(k))) setAllSortKey(String(k));
+    }
+
+    if (has.dir) {
+      const d = sp.get("dir");
+      if (d === "asc" || d === "desc") setAllSortDir(d);
+    }
+
+    if (has.ps) {
+      const ps = clampInt(sp.get("ps"), 10, 100);
+      if (ps && [10, 25, 50, 100].includes(ps)) setPageSize(ps);
+    }
+
+    if (has.page) {
+      const p = clampInt(sp.get("page"), 1, 999);
+      if (p) setPage(p);
+    }
+
+    if (has.ws) {
+      const ws = sp.get("ws");
+      if (["name", "score", "confidence"].includes(String(ws))) setWatchSort(String(ws));
+    }
+
+    // Prefs (only if URL didn't set it)
+    const p = loadPrefs();
+    if (!has.view && p?.view) setView(p.view);
+    if (!has.high && typeof p?.onlyHigh === "boolean") setOnlyHigh(p.onlyHigh);
+    if (!has.sort && p?.allSortKey) setAllSortKey(p.allSortKey);
+    if (!has.dir && p?.allSortDir) setAllSortDir(p.allSortDir);
+    if (!has.ws && p?.watchSort) setWatchSort(p.watchSort);
+    if (!has.ps && p?.pageSize) setPageSize(p.pageSize);
+    if (!has.regime && p?.regimeFilter) setRegimeFilter(p.regimeFilter);
+    if (!has.liq && p?.liquidityFilter) setLiquidityFilter(p.liquidityFilter);
+
+    urlHydratedRef.current = true;
+  }, []);
+
+  // Save prefs
+  useEffect(() => {
+    savePrefs({
+      view,
+      onlyHigh,
+      allSortKey,
+      allSortDir,
+      watchSort,
+      pageSize,
+      regimeFilter,
+      liquidityFilter,
     });
-    return out;
+  }, [view, onlyHigh, allSortKey, allSortDir, watchSort, pageSize, regimeFilter, liquidityFilter]);
+
+  // Write state -> URL (shareability)
+  useEffect(() => {
+    if (!urlHydratedRef.current) return;
+
+    const sp = new URLSearchParams();
+
+    if (view !== "all") sp.set("view", view);
+    if (search.trim()) sp.set("q", search.trim());
+    if (onlyHigh) sp.set("high", "1");
+
+    if (regimeFilter !== "All") sp.set("regime", regimeFilter);
+    if (liquidityFilter !== "Any") sp.set("liq", liquidityFilter);
+
+    if (allSortKey !== "score") sp.set("sort", allSortKey);
+    if (allSortDir !== "desc") sp.set("dir", allSortDir);
+
+    if (pageSize !== 25) sp.set("ps", String(pageSize));
+
+    if (view === "all" && page > 1) sp.set("page", String(page));
+    if (view === "watchlist" && watchSort !== "name") sp.set("ws", watchSort);
+
+    const next = sp.toString();
+    const nextUrl = next ? `${window.location.pathname}?${next}` : window.location.pathname;
+
+    if (lastUrlRef.current !== nextUrl) {
+      window.history.replaceState(null, "", nextUrl);
+      lastUrlRef.current = nextUrl;
+    }
+  }, [view, search, onlyHigh, regimeFilter, liquidityFilter, allSortKey, allSortDir, pageSize, page, watchSort]);
+
+  // Fetch assets
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      try {
+        setStatus({ loading: true, error: "" });
+
+        const url = new URL("/api/markets", window.location.origin);
+        if (speculativeMode) url.searchParams.set("speculative", "true");
+
+        const r = await fetch(url.toString(), { cache: "no-store" });
+        const j = await r.json();
+        if (!r.ok || !j?.ok) throw new Error(j?.error || `API error (${r.status})`);
+
+        const normalized = (j.assets || j.data || []).map((a) => ({
+          ...a,
+          current_price: a.current_price ?? a.priceUsd,
+          price_change_percentage_24h_in_currency: a.price_change_percentage_24h_in_currency ?? a.priceChange24h,
+          score: a.score ?? a.momentumScore,
+        }));
+
+        if (!cancelled) {
+          setAssets(normalized);
+          setStatus({ loading: false, error: "" });
+        }
+      } catch (e) {
+        if (!cancelled) setStatus({ loading: false, error: String(e?.message || e) });
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [speculativeMode]);
+
+  function toggleWatch(id) {
+    setWatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveWatchlist(next);
+      return next;
+    });
   }
 
-  const allSorted = useMemo(
-    () => sortArray(globallyFiltered, allSortKey, allSortDir),
-    [globallyFiltered, allSortKey, allSortDir]
-  );
+  function toggleAllSort(key) {
+    if (allSortKey === key) {
+      const nextDir = allSortDir === "asc" ? "desc" : "asc";
+      setAllSortDir(nextDir);
+      setPage(1);
+      return;
+    }
+    setAllSortKey(key);
+    setAllSortDir(key === "name" ? "asc" : "desc");
+    setPage(1);
+  }
+
+  function sortHint(key) {
+    if (allSortKey !== key) return "";
+    return allSortDir === "asc" ? "↑" : "↓";
+  }
+
+  function resetAllFilters() {
+    setSearch("");
+    setOnlyHigh(false);
+    setRegimeFilter("All");
+    setLiquidityFilter("Any");
+    setPage(1);
+  }
+
+  function copyShareLink() {
+    try {
+      navigator.clipboard.writeText(window.location.href);
+      alert("Shareable link copied.");
+    } catch {
+      alert("Unable to copy link.");
+    }
+  }
+
+  function handleSpeculativeClick() {
+    alert("Speculative Mode is Premium (locked). Default stays Curated Market.");
+    setSpeculativeMode(false);
+  }
+
+  function handleCompareClick() {
+    alert("Pinned comparison is a Premium feature (locked).");
+  }
+
+  const globallyFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let out = assets;
+
+    if (q) {
+      out = out.filter((c) => {
+        const name = String(c.name || "").toLowerCase();
+        const sym = String(c.symbol || "").toLowerCase();
+        return name.includes(q) || sym.includes(q);
+      });
+    }
+
+    if (onlyHigh) out = out.filter((c) => labelFromConfidence(c) === "High");
+    if (regimeFilter !== "All") out = out.filter((c) => String(c.regime || "—") === regimeFilter);
+
+    if (liquidityFilter === "High") out = out.filter((c) => liquidityToNumber(c) >= 3);
+    else if (liquidityFilter === "Medium+") out = out.filter((c) => liquidityToNumber(c) >= 2);
+
+    return out;
+  }, [assets, search, onlyHigh, regimeFilter, liquidityFilter]);
+
+  const allSorted = useMemo(() => sortArray(globallyFiltered, allSortKey, allSortDir), [
+    globallyFiltered,
+    allSortKey,
+    allSortDir,
+  ]);
 
   const watchlistItems = useMemo(() => {
     const items = globallyFiltered.filter((c) => watchIds.has(c.id));
     const dir = watchSort === "name" ? "asc" : "desc";
     return sortArray(items, watchSort, dir);
   }, [globallyFiltered, watchIds, watchSort]);
-
-  const paginatedAll = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return allSorted.slice(start, start + pageSize);
-  }, [allSorted, page, pageSize]);
-
-  const rows = view === "watchlist" ? watchlistItems : paginatedAll;
 
   const totalPages = useMemo(() => {
     if (view !== "all") return 1;
@@ -888,529 +616,381 @@ export default function Page() {
     if (view === "all" && page > totalPages) setPage(1);
   }, [page, totalPages, view]);
 
-  const watchSummary = useMemo(() => {
-    const items = watchlistItems;
-    const count = items.length;
-    if (!count) return { count: 0, avg: "—", high: 0 };
-    const avg = Math.round(items.reduce((sum, c) => sum + (c.score ?? 0), 0) / count);
-    const high = items.filter((c) => c.confidence?.label === "High").length;
-    return { count, avg, high };
-  }, [watchlistItems]);
+  const paginatedAll = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return allSorted.slice(start, start + pageSize);
+  }, [allSorted, page, pageSize]);
 
-  function toggleWatch(id) {
-    setWatchIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
+  const rows = view === "watchlist" ? watchlistItems : paginatedAll;
 
-  // --------- sorting UI handlers ----------
-  function toggleAllSort(key) {
-    if (allSortKey === key) {
-      const nextDir = allSortDir === "asc" ? "desc" : "asc";
-      setAllSortDir(nextDir);
-      updatePrefs({ allSortDir: nextDir });
-      showToast(`Sorting: ${key} ${nextDir === "asc" ? "↑" : "↓"}`);
-      return;
+  const resultsMeta = useMemo(() => {
+    return {
+      totalUniverse: assets.length,
+      filteredTotal: globallyFiltered.length,
+      showing: rows.length,
+    };
+  }, [assets.length, globallyFiltered.length, rows.length]);
+
+  const activeFilterChips = useMemo(() => {
+    const chips = [];
+
+    if (search.trim()) {
+      chips.push({
+        key: "search",
+        label: `Search: "${search.trim()}"`,
+        onClear: () => {
+          setSearch("");
+          setPage(1);
+        },
+      });
     }
-    const nextDir = key === "name" ? "asc" : "desc";
-    setAllSortKey(key);
-    setAllSortDir(nextDir);
-    updatePrefs({ allSortKey: key, allSortDir: nextDir });
-    setPage(1);
-    showToast(`Sorting: ${key} ${nextDir === "asc" ? "↑" : "↓"}`);
-  }
+    if (onlyHigh) {
+      chips.push({
+        key: "onlyHigh",
+        label: "Only High confidence",
+        onClear: () => {
+          setOnlyHigh(false);
+          setPage(1);
+        },
+      });
+    }
+    if (regimeFilter !== "All") {
+      chips.push({
+        key: "regime",
+        label: `Regime: ${regimeFilter}`,
+        onClear: () => {
+          setRegimeFilter("All");
+          setPage(1);
+        },
+      });
+    }
+    if (liquidityFilter !== "Any") {
+      chips.push({
+        key: "liquidity",
+        label: `Liquidity: ${liquidityFilter}`,
+        onClear: () => {
+          setLiquidityFilter("Any");
+          setPage(1);
+        },
+      });
+    }
 
-  function sortHint(key) {
-    if (allSortKey !== key) return "";
-    return allSortDir === "asc" ? " ▲" : " ▼";
-  }
+    return chips;
+  }, [search, onlyHigh, regimeFilter, liquidityFilter]);
 
-  // --------- Premium locked handlers ----------
-  function openPremium(featureName) {
-    setPremiumFeature(featureName);
-    setPremiumOpen(true);
-  }
+  const marketStats = useMemo(() => {
+    const list = globallyFiltered;
+    if (!list.length) return { riskOn: 0, neutral: 0, riskOff: 0, avgScore: 0, highConfidencePct: 0 };
 
-  function handleCompareClick() {
-    setCompareTeaserVisible(true);
-    openPremium("Pinned Comparison");
-    showToast("Compare is Premium (locked).");
-  }
+    const total = list.length;
+    const riskOn = list.filter((a) => a.regime === "Risk-On").length;
+    const neutral = list.filter((a) => a.regime === "Neutral").length;
+    const riskOff = list.filter((a) => a.regime === "Risk-Off").length;
 
-  function handleSavedViewsClick() {
-    setSavedViewsTeaserVisible(true);
-    setSavedViewsOpen(true);
-  }
+    const avgScore =
+      Math.round(list.reduce((sum, a) => sum + (Number(a.score ?? a.momentumScore ?? 0) || 0), 0) / total) || 0;
 
-  function handleSelectSavedViewLocked(preset) {
-    setSavedViewsTeaserVisible(true);
-    setSavedViewsOpen(false);
-    openPremium("Saved Views");
-    showToast(`“${preset?.name || "Preset"}” is Premium (locked).`);
-  }
+    const highConfidence = list.filter((a) => labelFromConfidence(a) === "High").length;
 
-  // --------- URL sync + Share URL builder ----------
-  const shareUrl = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    const url = new URL(window.location.href);
-    const sp = new URLSearchParams();
+    return {
+      riskOn: Math.round((riskOn / total) * 100),
+      neutral: Math.round((neutral / total) * 100),
+      riskOff: Math.round((riskOff / total) * 100),
+      avgScore,
+      highConfidencePct: Math.round((highConfidence / total) * 100),
+    };
+  }, [globallyFiltered]);
 
-    sp.set("view", view);
-    if (query.trim()) sp.set("q", query.trim());
-    sp.set("high", onlyHigh ? "1" : "0");
-    sp.set("limit", String(marketLimit));
-    sp.set("size", String(pageSize));
-    sp.set("page", String(page));
-
-    sp.set("sort", allSortKey);
-    sp.set("dir", allSortDir);
-    sp.set("wsort", watchSort);
-
-    if (selectedId) sp.set("sel", String(selectedId));
-
-    url.search = sp.toString();
-    return url.toString();
-  }, [view, query, onlyHigh, marketLimit, pageSize, page, allSortKey, allSortDir, watchSort, selectedId]);
-
-  useEffect(() => {
-    if (!hydratedRef.current) return;
-    try {
-      if (shareUrl && shareUrl !== lastUrlRef.current) {
-        window.history.replaceState({}, "", shareUrl);
-        lastUrlRef.current = shareUrl;
-      }
-    } catch {}
-  }, [shareUrl]);
-
-  async function handleShare() {
-    const ok = await copyToClipboard(shareUrl);
-    showToast(ok ? "Link copied." : "Couldn’t copy — try again.");
-  }
-
-  const hasActiveFilters = query.trim().length > 0 || onlyHigh !== defaultsRef.current.onlyHigh;
-
-  const selectedCoin = useMemo(() => {
+  const selected = useMemo(() => {
     if (!selectedId) return null;
-    return enriched.find((c) => c.id === selectedId) || null;
-  }, [selectedId, enriched]);
-
-  // ---------- NEW: Signal Context Layer ----------
-  const contextSet = useMemo(() => {
-    return view === "watchlist" ? watchlistItems : allSorted;
-  }, [view, watchlistItems, allSorted]);
-
-  const distribution = useMemo(() => {
-    const total = contextSet.length;
-    if (!total) {
-      return {
-        total: 0,
-        avgScore: "—",
-        highPct: 0,
-        medPct: 0,
-        lowPct: 0,
-        score60Pct: 0,
-      };
-    }
-
-    let high = 0;
-    let med = 0;
-    let low = 0;
-    let score60 = 0;
-    let sum = 0;
-
-    for (const c of contextSet) {
-      const s = Number(c.score ?? 0);
-      sum += s;
-      if (s >= 60) score60 += 1;
-
-      const label = c.confidence?.label;
-      if (label === "High") high += 1;
-      else if (label === "Medium") med += 1;
-      else low += 1;
-    }
-
-    const avg = Math.round(sum / total);
-
-    return {
-      total,
-      avgScore: String(avg),
-      highPct: pct(high, total),
-      medPct: pct(med, total),
-      lowPct: pct(low, total),
-      score60Pct: pct(score60, total),
-    };
-  }, [contextSet]);
-
-  const regime = useMemo(() => {
-    // Calm, heuristic context. Not a forecast.
-    const { total, score60Pct, highPct } = distribution;
-    if (!total) {
-      return {
-        label: "No data",
-        tone: "neutral",
-        sub: "Load data to compute context.",
-      };
-    }
-
-    // Thresholds tuned to feel stable and not overly reactive.
-    if (score60Pct >= 45 && highPct >= 25) {
-      return {
-        label: "Bullish Regime",
-        tone: "good",
-        sub: "Many assets show sustained strength with cleaner signals.",
-      };
-    }
-
-    if (score60Pct >= 25 || highPct >= 15) {
-      return {
-        label: "Mixed Regime",
-        tone: "warn",
-        sub: "Some leaders exist, but signal quality is uneven across the set.",
-      };
-    }
-
-    return {
-      label: "Weak Regime",
-      tone: "bad",
-      sub: "Momentum is sparse; setups are noisier and harder to rely on.",
-    };
-  }, [distribution]);
+    return assets.find((a) => a.id === selectedId) || null;
+  }, [assets, selectedId]);
 
   return (
-    <main className="min-h-screen bg-white text-slate-900">
-      <Toast message={toast} />
-
+    <div className="min-h-screen bg-white">
       <div className="max-w-6xl mx-auto px-5 py-8">
-        {/* Header */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex items-start justify-between gap-6">
           <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold">Crypto Momentum Dashboard</h1>
-              <span className="hidden sm:inline-flex">
-                <Badge tone={regime.tone}>Regime: {regime.label}</Badge>
-              </span>
-            </div>
-
-            {/* SaaS Status Bar */}
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-slate-500">
-                {fetchedAt ? `Last updated: ${formatTime(fetchedAt)}` : "Not updated yet"}
-              </span>
-
-              {isRefreshing ? (
-                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">
-                  Refreshing…
-                </span>
-              ) : null}
-
-              {status.error ? (
-                <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">
-                  {status.error}
-                </span>
-              ) : null}
-
-              <span className="text-slate-300">•</span>
-              <span className="text-slate-500">
-                Shortcuts: <b>/</b> search, <b>Esc</b> close/clear
-              </span>
-
-              {/* Mobile regime badge */}
-              <span className="sm:hidden">
-                <span className="text-slate-300">•</span>{" "}
-                <Badge tone={regime.tone}>Regime: {regime.label}</Badge>
-              </span>
+            <div className="text-2xl font-semibold text-slate-900">Altcoin Momentum Dashboard</div>
+            <div className="mt-1 text-sm text-slate-600">
+              Calm, explainable momentum scoring. Default universe is curated for signal quality.
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 sm:items-end">
-            <div className="flex flex-wrap gap-2 items-center justify-end">
-              <input
-                ref={searchRef}
-                className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-                placeholder="Search..."
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
+          <div className="flex items-center gap-2">
+            <button
+              className={`rounded-xl px-3 py-2 text-sm border ${
+                view === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+              }`}
+              onClick={() => {
+                setView("all");
+                setPage(1);
+              }}
+              type="button"
+            >
+              All
+            </button>
+            <button
+              className={`rounded-xl px-3 py-2 text-sm border ${
+                view === "watchlist"
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-700 border-slate-200"
+              }`}
+              onClick={() => setView("watchlist")}
+              type="button"
+            >
+              Watchlist
+            </button>
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div className="md:col-span-6">
+            <input
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+              placeholder="Search assets (name or ticker)…"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+            />
+          </div>
+
+          <div className="md:col-span-3 flex items-center gap-2">
+            <button
+              className={`w-full rounded-xl px-3 py-3 text-sm border ${
+                onlyHigh ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-white text-slate-700 border-slate-200"
+              }`}
+              onClick={() => {
+                setOnlyHigh((v) => !v);
+                setPage(1);
+              }}
+              type="button"
+              title="Show only High confidence assets"
+            >
+              Only High confidence
+            </button>
+          </div>
+
+          <div className="md:col-span-3 flex items-center gap-2">
+            <select
+              className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm bg-white"
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPage(1);
+              }}
+            >
+              {[10, 25, 50, 100].map((n) => (
+                <option key={n} value={n}>
+                  {n} / page
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Filters row + actions */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="text-xs text-slate-500 mr-1">Regime</div>
+          {["All", "Risk-On", "Neutral", "Risk-Off"].map((r) => (
+            <Pill
+              key={r}
+              active={regimeFilter === r}
+              onClick={() => {
+                setRegimeFilter(r);
+                setPage(1);
+              }}
+              title={`Filter: ${r}`}
+            >
+              {r}
+            </Pill>
+          ))}
+
+          <div className="w-px h-6 bg-slate-200 mx-2" />
+
+          <div className="text-xs text-slate-500 mr-1">Liquidity</div>
+          {["Any", "Medium+", "High"].map((l) => (
+            <Pill
+              key={l}
+              active={liquidityFilter === l}
+              onClick={() => {
+                setLiquidityFilter(l);
+                setPage(1);
+              }}
+              title={`Filter: ${l}`}
+            >
+              {l}
+            </Pill>
+          ))}
+
+          <div className="w-px h-6 bg-slate-200 mx-2" />
+
+          <button
+            type="button"
+            onClick={handleSpeculativeClick}
+            className="rounded-full px-3 py-1.5 text-xs border bg-white text-slate-700 border-slate-200 hover:bg-slate-50 inline-flex items-center gap-2"
+            title="Premium: Include High-Volatility / Meme Assets (locked)"
+          >
+            <span className="text-slate-500">🔒</span>
+            Speculative Mode (Premium)
+          </button>
+
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full px-3 py-1.5 text-xs border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              onClick={copyShareLink}
+              title="Copy shareable link"
+            >
+              Copy Link
+            </button>
+
+            <button
+              type="button"
+              className="rounded-full px-3 py-1.5 text-xs border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              onClick={resetAllFilters}
+              title="Reset search + filters"
+            >
+              Reset all filters
+            </button>
+          </div>
+        </div>
+
+        {/* Active filters + Results count */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="text-xs text-slate-500">
+            {view === "all" ? (
+              <>
+                Showing <span className="text-slate-900 font-semibold">{resultsMeta.showing}</span> of{" "}
+                <span className="text-slate-900 font-semibold">{resultsMeta.filteredTotal}</span> (Universe{" "}
+                <span className="text-slate-900 font-semibold">{resultsMeta.totalUniverse}</span>)
+              </>
+            ) : (
+              <>
+                Watchlist showing <span className="text-slate-900 font-semibold">{resultsMeta.showing}</span> of{" "}
+                <span className="text-slate-900 font-semibold">{watchlistItems.length}</span>
+              </>
+            )}
+          </div>
+
+          {activeFilterChips.length ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {activeFilterChips.map((c) => (
+                <FilterChip key={c.key} label={c.label} onClear={c.onClear} title="Click to remove this filter" />
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">No active filters</div>
+          )}
+        </div>
+
+        {/* Market Regime Overview */}
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="text-xs text-emerald-700">Risk-On</div>
+            <div className="mt-1 text-xl font-semibold text-emerald-900">{marketStats.riskOn}%</div>
+          </div>
+
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <div className="text-xs text-amber-700">Neutral</div>
+            <div className="mt-1 text-xl font-semibold text-amber-900">{marketStats.neutral}%</div>
+          </div>
+
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+            <div className="text-xs text-rose-700">Risk-Off</div>
+            <div className="mt-1 text-xl font-semibold text-rose-900">{marketStats.riskOff}%</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs text-slate-500">Avg Momentum</div>
+            <div className="mt-1 text-xl font-semibold text-slate-900">{marketStats.avgScore}</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs text-slate-500">High Confidence</div>
+            <div className="mt-1 text-xl font-semibold text-slate-900">{marketStats.highConfidencePct}%</div>
+          </div>
+        </div>
+
+        {/* Market Breadth Bar (clickable) */}
+        <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-semibold text-slate-900">Market breadth</div>
+            <div className="flex items-center gap-3 text-xs text-slate-500">
+              <span>Click a segment to filter Regime</span>
+              <button
+                type="button"
+                className="underline hover:text-slate-700"
+                onClick={() => {
+                  setRegimeFilter("All");
+                  setPage(1);
+                }}
+                title="Reset regime filter"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 h-3 w-full overflow-hidden rounded-full border border-slate-200 bg-slate-50">
+            <div className="flex h-full w-full">
+              <button
+                type="button"
+                className="h-full bg-emerald-400/60 hover:bg-emerald-400/80 transition"
+                style={{ width: pctWidth(marketStats.riskOn) }}
+                title={`Risk-On ${marketStats.riskOn}% (click to filter)`}
+                onClick={() => {
+                  setRegimeFilter("Risk-On");
                   setPage(1);
                 }}
               />
-
               <button
-                onClick={() => load(false)}
-                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Refresh data"
-              >
-                <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-                Refresh
-              </button>
-
-              <button
-                onClick={handleShare}
-                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Copy a shareable link with your current state"
-              >
-                <Link2 className="h-4 w-4" />
-                Share link
-              </button>
-
-              <button
-                onClick={handleSavedViewsClick}
-                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Saved Views (Premium)"
-              >
-                <Bookmark className="h-4 w-4" />
-                Saved views
-                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-                  <Lock className="h-3.5 w-3.5" />
-                  Premium
-                </span>
-              </button>
-
-              <button
-                onClick={() => setHelpOpen(true)}
-                className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-2 hover:bg-slate-50"
-                title="Help"
-              >
-                <HelpCircle className="h-4 w-4" />
-                <span className="hidden sm:inline">Help</span>
-              </button>
-
-              <button
-                onClick={doResetPreferences}
-                className="text-xs text-slate-600 hover:text-slate-900 underline underline-offset-2"
-                title="Reset saved preferences on this device"
-              >
-                Reset preferences
-              </button>
-            </div>
-
-            <div className="flex flex-wrap gap-2 items-center justify-end">
-              <Toggle
-                checked={onlyHigh}
-                onChange={(v) => {
-                  setOnlyHigh(v);
+                type="button"
+                className="h-full bg-amber-400/60 hover:bg-amber-400/80 transition"
+                style={{ width: pctWidth(marketStats.neutral) }}
+                title={`Neutral ${marketStats.neutral}% (click to filter)`}
+                onClick={() => {
+                  setRegimeFilter("Neutral");
                   setPage(1);
-                  updatePrefs({ watchOnlyHighDefault: v });
-                  showToast(v ? "Filter: Only High confidence" : "Filter: All confidence");
                 }}
-                label="Only High confidence"
               />
-
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span>Limit</span>
-                <select
-                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
-                  value={marketLimit}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setMarketLimit(v);
-                    setPage(1);
-                    updatePrefs({ marketLimit: v });
-                    showToast(`Limit: Top ${v}`);
-                  }}
-                >
-                  <option value={50}>Top 50</option>
-                  <option value={100}>Top 100</option>
-                  <option value={250}>Top 250</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span>Page size</span>
-                <select
-                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
-                  value={pageSize}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    setPageSize(v);
-                    setPage(1);
-                    updatePrefs({ pageSize: v });
-                    showToast(`Page size: ${v}`);
-                  }}
-                >
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                <span>Watch sort</span>
-                <select
-                  className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs text-slate-700"
-                  value={watchSort}
-                  onChange={(e) => {
-                    const v = clampEnum(e.target.value, ["score", "change24", "name", "price"], "score");
-                    setWatchSort(v);
-                    updatePrefs({ watchSortDefault: v });
-                    showToast(`Watchlist sort: ${v}`);
-                  }}
-                >
-                  <option value="score">Score</option>
-                  <option value="change24">24h</option>
-                  <option value="price">Price</option>
-                  <option value="name">Name</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* NEW: Signal Context (Regime + Distribution) */}
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="text-sm font-semibold text-slate-900">Signal Context</div>
-                <Badge tone={regime.tone}>{regime.label}</Badge>
-                <span className="text-xs text-slate-500">Momentum ≠ prediction</span>
-              </div>
-              <div className="mt-1 text-xs text-slate-600">{regime.sub}</div>
-            </div>
-
-            <div className="text-xs text-slate-500">
-              Basis:{" "}
-              <span className="text-slate-700 font-medium">
-                {view === "watchlist" ? "Watchlist" : "All"}
-              </span>{" "}
-              • {distribution.total ? `${distribution.total} assets` : "—"}
-            </div>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <StatCard title="Avg Momentum" value={distribution.avgScore} sub="Across current set" />
-            <StatCard title="Confidence Mix" value={`${distribution.highPct}% High`} sub={`${distribution.medPct}% Medium • ${distribution.lowPct}% Low`} />
-            <StatCard title="Strength Density" value={`${distribution.score60Pct}% ≥ 60`} sub="How many assets show sustained strength" />
-          </div>
-        </div>
-
-        {/* Filter Bar */}
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 text-sm text-slate-700">
-              <Filter className="h-4 w-4 text-slate-500" />
-              <span className="font-medium">Filters</span>
-              <span className="text-xs text-slate-500">{view === "watchlist" ? "Watchlist view" : "All assets view"}</span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {hasActiveFilters ? (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-                >
-                  Clear filters
-                </button>
-              ) : (
-                <span className="text-xs text-slate-500">No active filters</span>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {query.trim() ? (
-              <Chip
-                onRemove={() => {
-                  setQuery("");
+              <button
+                type="button"
+                className="h-full bg-rose-400/60 hover:bg-rose-400/80 transition"
+                style={{ width: pctWidth(marketStats.riskOff) }}
+                title={`Risk-Off ${marketStats.riskOff}% (click to filter)`}
+                onClick={() => {
+                  setRegimeFilter("Risk-Off");
                   setPage(1);
-                  showToast("Search cleared.");
                 }}
-              >
-                Search: <span className="font-medium">{query.trim()}</span>
-              </Chip>
-            ) : null}
-
-            {onlyHigh ? (
-              <Chip
-                onRemove={() => {
-                  setOnlyHigh(false);
-                  setPage(1);
-                  updatePrefs({ watchOnlyHighDefault: false });
-                  showToast("Filter: All confidence");
-                }}
-              >
-                Only High confidence
-              </Chip>
-            ) : null}
-
-            <Chip>Limit: {marketLimit}</Chip>
-            <Chip>Page size: {pageSize}</Chip>
-            <Chip>
-              All sort: {allSortKey} {allSortDir === "asc" ? "↑" : "↓"}
-            </Chip>
-
-            {compareTeaserVisible ? (
-              <Chip
-                onRemove={() => {
-                  setCompareTeaserVisible(false);
-                  showToast("Compare teaser dismissed.");
-                }}
-              >
-                Compare <span className="text-slate-400">(Premium)</span>
-              </Chip>
-            ) : null}
-
-            {savedViewsTeaserVisible ? (
-              <Chip
-                onRemove={() => {
-                  setSavedViewsTeaserVisible(false);
-                  showToast("Saved Views teaser dismissed.");
-                }}
-              >
-                Saved Views <span className="text-slate-400">(Premium)</span>
-              </Chip>
-            ) : null}
-
-            <span className="ml-auto text-xs text-slate-500">
-              Showing <b>{rows.length}</b> item(s)
-              {view === "all" ? (
-                <>
-                  {" "}
-                  of <b>{allSorted.length}</b>
-                </>
-              ) : null}
-            </span>
+              />
+            </div>
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="mt-6 flex gap-3">
-          <button
-            onClick={() => {
-              setView("all");
-              setPage(1);
-              showToast("View: All");
-            }}
-            className={`px-4 py-2 rounded-xl border ${
-              view === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white border-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            All
-          </button>
-          <button
-            onClick={() => {
-              setView("watchlist");
-              setPage(1);
-              showToast("View: Watchlist");
-            }}
-            className={`px-4 py-2 rounded-xl border ${
-              view === "watchlist"
-                ? "bg-slate-900 text-white border-slate-900"
-                : "bg-white border-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            Watchlist ({watchIds.size})
-          </button>
-        </div>
-
-        {/* Watchlist Overview */}
+        {/* Watchlist sort (only visible in watchlist view) */}
         {view === "watchlist" ? (
-          <div className="mt-6 grid sm:grid-cols-3 gap-4">
-            <StatCard title="Tracked Assets" value={watchSummary.count} />
-            <StatCard title="Avg Momentum" value={watchSummary.avg} sub="0–100 scale" />
-            <StatCard title="High Confidence" value={watchSummary.high} sub={onlyHigh ? "Filter: Only High" : ""} />
+          <div className="mt-4 flex items-center justify-end">
+            <select
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+              value={watchSort}
+              onChange={(e) => setWatchSort(e.target.value)}
+              title="Sort watchlist"
+            >
+              <option value="name">Sort: Name</option>
+              <option value="score">Sort: Momentum</option>
+              <option value="confidence">Sort: Confidence</option>
+            </select>
+          </div>
+        ) : null}
+
+        {/* Error */}
+        {status.error ? (
+          <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            <b>Error:</b> {status.error}
           </div>
         ) : null}
 
@@ -1428,6 +1008,7 @@ export default function Page() {
                       if (view === "all") toggleAllSort("name");
                     }}
                     title={view === "all" ? "Sort by name" : "Watchlist sorting is controlled above"}
+                    type="button"
                   >
                     Asset
                     {view === "all" ? <span className="text-xs text-slate-500">{sortHint("name")}</span> : null}
@@ -1441,6 +1022,7 @@ export default function Page() {
                       if (view === "all") toggleAllSort("price");
                     }}
                     title={view === "all" ? "Sort by price" : "Watchlist sorting is controlled above"}
+                    type="button"
                   >
                     Price
                     {view === "all" ? <span className="text-xs text-slate-500">{sortHint("price")}</span> : null}
@@ -1454,6 +1036,7 @@ export default function Page() {
                       if (view === "all") toggleAllSort("change24");
                     }}
                     title={view === "all" ? "Sort by 24h change" : "Watchlist sorting is controlled above"}
+                    type="button"
                   >
                     24h
                     {view === "all" ? <span className="text-xs text-slate-500">{sortHint("change24")}</span> : null}
@@ -1467,13 +1050,29 @@ export default function Page() {
                       if (view === "all") toggleAllSort("score");
                     }}
                     title={view === "all" ? "Sort by momentum score" : "Watchlist sorting is controlled above"}
+                    type="button"
                   >
                     Momentum
                     {view === "all" ? <span className="text-xs text-slate-500">{sortHint("score")}</span> : null}
                   </button>
                 </th>
 
-                <th className="px-4 py-3 text-left">Confidence</th>
+                <th className="px-4 py-3 text-left">
+                  <button
+                    className={`inline-flex flex-col items-start hover:text-slate-900 ${view === "watchlist" ? "cursor-default" : ""}`}
+                    onClick={() => {
+                      if (view === "all") toggleAllSort("confidence");
+                    }}
+                    title={view === "all" ? "Sort by confidence" : "Watchlist sorting is controlled above"}
+                    type="button"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      Confidence
+                      {view === "all" ? <span className="text-xs text-slate-500">{sortHint("confidence")}</span> : null}
+                    </span>
+                    <span className="text-[11px] font-normal text-slate-400">Liquidity-weighted</span>
+                  </button>
+                </th>
               </tr>
             </thead>
 
@@ -1483,66 +1082,60 @@ export default function Page() {
               ) : rows.length === 0 ? (
                 <tr>
                   <td className="px-4 py-10 text-slate-600" colSpan={6}>
-                    {view === "watchlist" ? (
-                      <div className="space-y-2">
-                        <div className="text-sm font-semibold text-slate-900">No watchlist results</div>
-                        <div className="text-sm text-slate-600">
-                          {onlyHigh ? (
-                            <>
-                              Your watchlist may be filtered out. Turn off <b>Only High confidence</b> to see everything.
-                            </>
-                          ) : (
-                            <>
-                              Your watchlist is empty. Go to <b>All</b> and star assets to track them.
-                            </>
-                          )}
-                        </div>
+                    <div className="space-y-2">
+                      <div className="text-sm font-semibold text-slate-900">No results</div>
+                      <div className="text-sm text-slate-600">
+                        Try a different search or loosen filters.{" "}
+                        <button className="underline" type="button" onClick={resetAllFilters}>
+                          Reset all filters
+                        </button>
+                        .
                       </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="text-sm font-semibold text-slate-900">No results</div>
-                        <div className="text-sm text-slate-600">
-                          Try a different search. {onlyHigh ? "Or turn off Only High confidence." : ""}
-                        </div>
-                      </div>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ) : (
                 rows.map((c) => {
-                  const label = c.confidence?.label ?? "—";
-                  const tone = label === "High" ? "good" : label === "Medium" ? "warn" : "bad";
+                  const confidenceLabel = labelFromConfidence(c);
+                  const confidenceTone =
+                    confidenceLabel === "High" ? "good" : confidenceLabel === "Medium" ? "warn" : "bad";
+
                   const watched = watchIds.has(c.id);
+
+                  const score = c.score ?? c.momentumScore ?? "—";
+                  const price = c.current_price ?? c.priceUsd;
+                  const change24h = c.price_change_percentage_24h_in_currency ?? c.priceChange24h;
 
                   return (
                     <tr
                       key={c.id}
                       className="hover:bg-slate-50 cursor-pointer"
-                      onClick={() => setSelectedId(c.id)}
+                      onClick={() => {
+                        setSelectedId(c.id);
+                        setShowRaw(false);
+                      }}
                       title="Click for explanation"
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-2">
-                          <StarButton
-                            active={watched}
-                            onClick={() => {
-                              toggleWatch(c.id);
-                              showToast(watched ? "Removed from watchlist." : "Added to watchlist.");
-                            }}
-                          />
+                          <StarButton active={watched} onClick={() => toggleWatch(c.id)} />
                           <CompareButtonLocked onClick={handleCompareClick} />
                         </div>
                       </td>
 
                       <td className="px-4 py-3 font-medium">
-                        {c.name} <span className="text-slate-400 font-medium">({c.symbol.toUpperCase()})</span>
+                        {c.name}{" "}
+                        <span className="text-slate-400 font-medium">({String(c.symbol || "").toUpperCase()})</span>
                       </td>
 
-                      <td className="px-4 py-3 text-right">{formatMoney(c.current_price)}</td>
-                      <td className="px-4 py-3 text-right">{formatPct(c.price_change_percentage_24h_in_currency)}</td>
-                      <td className="px-4 py-3 text-right font-semibold">{c.score}</td>
+                      <td className="px-4 py-3 text-right">{formatMoney(price)}</td>
+                      <td className="px-4 py-3 text-right">{formatPct(change24h)}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{score}</td>
+
                       <td className="px-4 py-3">
-                        <Badge tone={tone}>{label}</Badge>
+                        <span title="Liquidity-weighted confidence. Click row for details.">
+                          <Badge tone={confidenceTone}>{confidenceLabel}</Badge>
+                        </span>
                       </td>
                     </tr>
                   );
@@ -1550,99 +1143,128 @@ export default function Page() {
               )}
             </tbody>
           </table>
-
-          {/* Pagination only for All */}
-          {view === "all" && !status.loading && rows.length > 0 ? (
-            <div className="flex justify-between items-center px-4 py-3 border-t border-slate-200">
-              <div className="text-xs text-slate-500">
-                Page {page} / {totalPages}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  className="px-3 py-2 border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-                <button
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="px-3 py-2 border border-slate-200 rounded-xl disabled:opacity-50 hover:bg-slate-50"
-                >
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-            </div>
-          ) : null}
         </div>
 
-        {/* Premium microcopy */}
-        <div className="mt-4 text-xs text-slate-500 flex items-center gap-2">
-          <ArrowUpDown className="h-3.5 w-3.5" />
-          Tip: Click table headers in <b>All</b> to sort. Click a row for explainability. Premium: <b>Compare</b> + <b>Saved Views</b>.
-        </div>
-      </div>
-
-      {/* Premium Compare teaser bar */}
-      {compareTeaserVisible ? (
-        <div className="fixed bottom-4 left-0 right-0 z-30 px-4">
-          <div className="mx-auto max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-lg px-4 py-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-900 inline-flex items-center gap-2">
-                  <Columns2 className="h-4 w-4 text-slate-700" />
-                  Compare
-                  <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-600">
-                    <Lock className="h-3.5 w-3.5" />
-                    Premium
-                  </span>
-                </span>
-
-                <div className="ml-2 text-sm text-slate-600">Pin 2 assets to compare side-by-side (locked).</div>
-              </div>
-
-              <div className="flex items-center gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCompareTeaserVisible(false);
-                    showToast("Compare teaser dismissed.");
-                  }}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  Dismiss
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    openPremium("Pinned Comparison");
-                    showToast("Compare is Premium (locked).");
-                  }}
-                  className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
-                >
-                  Upgrade to unlock
-                </button>
-              </div>
+        {/* Pagination */}
+        {view === "all" ? (
+          <div className="mt-4 flex items-center justify-between">
+            <div className="text-sm text-slate-600">
+              Page <b className="text-slate-900">{page}</b> / <b className="text-slate-900">{totalPages}</b> •{" "}
+              <b className="text-slate-900">{allSorted.length}</b> results
             </div>
-            <div className="mt-2 text-xs text-slate-500">
-              Calm decision-support: compare momentum drivers and confidence context. No predictions.
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-40"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                type="button"
+              >
+                Prev
+              </button>
+              <button
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-40"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                type="button"
+              >
+                Next
+              </button>
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
-      <Drawer open={!!selectedId} onClose={() => setSelectedId(null)} coin={selectedCoin} />
+      {/* Explain Modal */}
+      <Modal
+        open={Boolean(selected)}
+        title={selected ? `${selected.name} (${String(selected.symbol || "").toUpperCase()})` : "Explanation"}
+        onClose={() => {
+          setSelectedId(null);
+          setShowRaw(false);
+        }}
+      >
+        {!selected ? null : (() => {
+          const snap = buildExplainSnapshot(selected);
 
-      <SavedViewsModal
-        open={savedViewsOpen}
-        onClose={() => setSavedViewsOpen(false)}
-        onSelectLocked={handleSelectSavedViewLocked}
-      />
+          const score = selected.score ?? selected.momentumScore ?? "—";
+          const conf = labelFromConfidence(selected);
+          const liq = selected.liquidityStrength ?? "—";
+          const reg = selected.regime ?? "—";
+          const price = selected.current_price ?? selected.priceUsd;
+          const change24 = selected.price_change_percentage_24h_in_currency ?? selected.priceChange24h;
 
-      <PremiumModal open={premiumOpen} onClose={() => setPremiumOpen(false)} feature={premiumFeature} />
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs text-slate-500">Price</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{formatMoney(price)}</div>
+                  <div className="mt-1 text-sm text-slate-600">{formatPct(change24)} (24h)</div>
+                </div>
 
-      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
-    </main>
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs text-slate-500">Momentum</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{score}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs text-slate-500">Confidence</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{conf}</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-900">Snapshot</div>
+
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {snap.chips.map((c, i) => (
+                    <ReasonChip key={i} tone={c.tone}>
+                      {c.text}
+                    </ReasonChip>
+                  ))}
+                </div>
+
+                <div className="mt-3 space-y-1">
+                  {snap.bullets.map((b, i) => (
+                    <div key={i} className="text-sm text-slate-700">
+                      • {b}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 border-t border-slate-200 pt-3">
+                  <KeyValue k="Regime" v={reg} />
+                  <KeyValue k="Liquidity" v={liq} />
+                  {typeof selected.volatility === "number" ? <KeyValue k="Volatility" v={selected.volatility} /> : null}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-slate-900">Advanced</div>
+                  <button
+                    type="button"
+                    className="text-xs underline text-slate-600 hover:text-slate-900"
+                    onClick={() => setShowRaw((v) => !v)}
+                  >
+                    {showRaw ? "Hide raw data" : "Show raw data"}
+                  </button>
+                </div>
+
+                {showRaw ? (
+                  <pre className="mt-3 text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 overflow-auto">
+                    {JSON.stringify(selected, null, 2)}
+                  </pre>
+                ) : (
+                  <div className="mt-2 text-sm text-slate-600">
+                    Raw fields are available for power users, but the snapshot is designed to keep decision-making disciplined.
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+    </div>
   );
 }
