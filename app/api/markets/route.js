@@ -56,7 +56,7 @@ export async function GET(req) {
     url.searchParams.set("per_page", "250");
     url.searchParams.set("page", "1");
     url.searchParams.set("sparkline", "false");
-    url.searchParams.set("price_change_percentage", "24h");
+    url.searchParams.set("price_change_percentage", "24h,7d");
 
     // Upstream fetch with Next revalidation caching
     const upstream = await fetch(url.toString(), {
